@@ -12,10 +12,16 @@ The best way to run the code is by using [Nextflow](https://www.nextflow.io/).
 Once you have installed Nextflow, run the test job locally or on your favourite cluster:
 
 ```
-nextflow run https://gitlab.com/s.senkin/MSA -profile docker
+nextflow run https://gitlab.com/s.senkin/MSA -profile conda
 ```
 
-If you don't have [docker](https://www.docker.com/) installed, you can also use [conda](https://conda.io) or [singularity](https://sylabs.io/singularity/) profiles (docker and singularity are recommended).
+**Important caveat**: the pipeline is written in Nextflow DSL1 which is not supported by latest versions of Nextflow. Please roll back to Nextflow 22.10.4 or earlier by setting the *NXF_VER* variable in your environment:
+
+```
+export NXF_VER=22.10.4
+```
+
+It is recommended to use [docker](https://www.docker.com/) or [singularity](https://sylabs.io/singularity/) profiles as these normally provide greater stability and reproducibility than [conda](https://conda.io).
 
 The pipeline should run and produce all the results automatically. You can also retrieve the code ([see below](https://gitlab.com/s.senkin/MSA#getting-started)) in order to adjust all the inputs and parameters. In the [run_auto_optimised_analysis.nf](run_auto_optimised_analysis.nf) file various parameters can be specified.
 
