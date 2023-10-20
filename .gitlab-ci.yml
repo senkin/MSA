@@ -12,5 +12,6 @@ test_nextflow:
     - java -version
     - apt-get -y install curl
     - curl -s https://get.nextflow.io | bash
+    - export NXF_VER=22.10.4
   script:
     - ./nextflow run run_auto_optimised_analysis.nf -profile conda
