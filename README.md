@@ -62,7 +62,7 @@ All parameters are described in the dedicated [wiki page](https://gitlab.com/s.s
 | --output_path | . | output path for plots and tables |
 | --mutation_types | \['SBS', 'DBS', 'ID'\] | mutation types to analyse. Only one can be specified from command line, or a list in the run_auto_optimised_analysis.nf file |
 | --number_of_samples | -1 | number of samples to analyse (-1 means all available) |
-| --SBS_context | 96 | SBS context to use (96, 192, 288 or 1536) |
+| --SBS_context | 96 | SBS context to use (96, 192, 288, 1536, or 4608) |
 | --COSMIC_signatures | false | if set to true, COSMIC signatures are used form SigProfiler output, otherwise de-novo ones are used |
 
 ## Running manually
