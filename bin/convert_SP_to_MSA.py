@@ -61,7 +61,7 @@ if __name__ == '__main__':
     parser.add_argument("-t", "--mutation_types", nargs='+', dest="mutation_types", default=['SBS','DBS','ID'],
                       help="set mutation types, e.g. -t SBS DBS ID (default)")
     parser.add_argument("-c", "--contexts", nargs='+', dest="contexts", type=int, default=[96, 288, 1536],
-                      help="set SBS contexts e.g. -c 96 288 1536 (default). Supported contexts: 96, 192, 288, 1536")
+                      help="set SBS contexts e.g. -c 96 288 1536 (default). Supported contexts: 96, 192, 288, 1536, 4608")
     parser.add_argument("-o", "--output_path", dest="output_path", default='./',
                         help="set output path for converted tables (default: ./)")
     # parser.add_argument("-e", "--exome", dest="exome", action="store_true",
@@ -114,7 +114,7 @@ if __name__ == '__main__':
                 elif context in [192, 288]:
                     index_col = [0,1,2]
                     signatures[mutation_type + str(context)] = pd.read_csv('%s/%s_%s_%i_signatures.csv' % (signature_tables_path, input_signatures_prefix, mutation_type, context), sep=',', index_col=index_col)
-                elif context == 1536:
+                elif context in [1536, 4608]:
                     index_col = 0
                     signatures[mutation_type + str(context)] = pd.read_csv('%s/%s_%s_%i_signatures.csv' % (signature_tables_path, input_signatures_prefix, mutation_type, context), sep=',', index_col=index_col)
         else:

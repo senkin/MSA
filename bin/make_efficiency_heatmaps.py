@@ -173,7 +173,7 @@ if __name__ == '__main__':
     parser.add_argument("-d", "--dataset", dest="dataset_name", default='SIM',
                       help="set the dataset name ('SIM' by default)")
     parser.add_argument("-c", "--context", dest="context", default=96, type=int,
-                      help="set SBS context (96, 192, 288, 1536)")
+                      help="set SBS context (96, 192, 288, 1536, 4608)")
     parser.add_argument("-m", "--method", dest="method", default='NNLS',
                       help="set the method name (e.g. 'NNLS')")
     parser.add_argument("-i", "--input_reco_path", dest="input_reco_path", default='output_opt_check/',
