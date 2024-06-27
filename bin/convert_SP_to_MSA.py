@@ -9,6 +9,7 @@ import os
 import glob
 import copy
 import pandas as pd
+from pathlib import Path
 from argparse import ArgumentParser
 from common_methods import make_folder_if_not_exists
 
@@ -175,11 +176,12 @@ if __name__ == '__main__':
             if not input_files:
                 raise ValueError("Can't find any files of mutation type %s in input path %s" % (mutation_type, input_path) )
             for file in input_files:
+                file_stem = Path(file).stem
                 if mutation_type=='SBS':
                     for context in contexts:
-                        if context==192 and not '384' in file:
+                        if context==192 and not '384' in file_stem:
                             continue
-                        if context!=192 and not str(context) in file:
+                        if context!=192 and not str(context) in file_stem:
                             continue
                         input_table = pd.read_csv(file, sep='\t', index_col=0)
                         print('Converting:', mutation_type, context, file)
@@ -190,16 +192,16 @@ if __name__ == '__main__':
                             compare_index(input_table, signature_table)
                         new_filename = output_path + '/%s/WGS_%s.%i.csv' % (dataset_name, dataset_name, context)
                         if context==192:
-                            new_filename = new_filename.replace('384','192')
+                            new_filename = new_filename.replace('SBS384','SBS192')
                         input_table.to_csv(new_filename, sep = ',')
                 else:
-                    if mutation_type=='DBS' and not '78' in file:
+                    if mutation_type=='DBS' and not '78' in file_stem:
                         continue
-                    if mutation_type=='ID' and not '83' in file:
+                    if mutation_type=='ID' and not '83' in file_stem:
                         continue
-                    if mutation_type=='SV' and not '32' in file:
+                    if mutation_type=='SV' and not '32' in file_stem:
                         continue
-                    if mutation_type=='CNV' and not '48' in file:
+                    if mutation_type=='CNV' and not '48' in file_stem:
                         continue
                     # simply overwrite index for other mutation types (equality assumption)
                     print('Converting:', mutation_type, file)
