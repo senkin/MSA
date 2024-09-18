@@ -62,7 +62,7 @@ if __name__ == '__main__':
     parser.add_option("-t", "--mutation_type", dest="mutation_type", default='',
                       help="set mutation type (SBS, DBS, ID, SV, CNV)")
     parser.add_option("-c", "--context", dest="context", default=96, type='int',
-                      help="set SBS context (96, 192, 1536)")
+                      help="set SBS context (96, 192, 1536, 4608)")
     parser.add_option("-s", "--signature_path", dest="signature_tables_path", default='signature_tables/',
                       help="set path to PCAWG signature tables (for reference)")
     parser.add_option("-o", "--output_path", dest="output_path", default='signature_tables/',
@@ -101,7 +101,7 @@ if __name__ == '__main__':
             output_filename = '%s/sigRandom_SBS_%i_signatures.csv' % (output_path, context)
             reference_signatures = pd.read_csv('%s/sigProfiler_SBS_%i_signatures.csv' %
                                             (signature_tables_path, context), index_col=[0,1,2])
-        elif context==1536:
+        elif context in [1536, 4608]:
             output_filename = '%s/sigRandom_SBS_%i_signatures.csv' % (output_path, context)
             reference_signatures = pd.read_csv('%s/sigProfiler_SBS_%i_signatures.csv' %
                                             (signature_tables_path, context), index_col=0)
@@ -129,7 +129,7 @@ if __name__ == '__main__':
 
     if options.sparse:
         if not mutation_type=='SBS':
-            warnings.warn("Sparse signatures are not supported for non-SBS signatures yet. Generating homogeneous signatures.")
+            warnings.warn("Sparse signatures are not supported for non-SBS96 signatures yet. Generating homogeneous signatures.")
         else:
             if context==96:
                 main_category_index_level = 0

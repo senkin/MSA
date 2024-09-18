@@ -1,5 +1,5 @@
 #!/usr/bin/env nextflow
-
+nextflow.enable.dsl = 1
 // Copyright (C) 2022 Sergey Senkin
 
 // This program is free software: you can redistribute it and/or modify
@@ -20,7 +20,7 @@ params.SP_extractor_output_path = null // optional path to SigProfilerExtractor 
 params.SP_matrix_generator_output_path = null // optional path to SigProfilerMatrixGenerator output
 params.COSMIC_signatures = false // if set to true, COSMIC signatures are used form SigProfiler output, otherwise de-novo ones are used
 params.dataset = ['SIM_test'] // several datasets can be provided as long as input mutation tables are available
-params.mutation_types = ['SBS', 'DBS', 'ID'] // add or remove mutation types if needed
+params.mutation_types = ['SBS'] // add or remove mutation types if needed
 params.input_tables = "$baseDir/input_mutation_tables"
 params.SBS_context = 96 // 96, 192, 288, 1536 context matrices can be provided (SBS only)
 params.number_of_samples = -1 // number of samples to analyse (-1 means all available)

@@ -119,7 +119,7 @@ if __name__ == '__main__':
     parser.add_argument("-t", "--mutation_type", dest="mutation_type", default='',
                         help="set mutation type (SBS, DBS, ID, SV, CNV)")
     parser.add_argument("-c", "--context", dest="context", default=192, type=int,
-                        help="set SBS context (96, 192)")
+                        help="set SBS context (96, 192, 288, 1536, 4608)")
     parser.add_argument("-a", "--plot_absolute_numbers", dest="abs_numbers", action="store_true",
                         help="show absolute numbers of mutations")
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true",
@@ -159,7 +159,7 @@ if __name__ == '__main__':
             input_mutations = pd.read_csv('%s/%s/WGS_%s.%i.csv' % (input_mutations_folder, dataset_name, dataset_name, context), index_col=[0,1])
         elif context in [192, 288]:
             input_mutations = pd.read_csv('%s/%s/WGS_%s.%i.csv' % (input_mutations_folder, dataset_name, dataset_name, context), index_col=[0,1,2])
-        elif context==1536:
+        elif context in [1536, 4608]:
             input_mutations = pd.read_csv('%s/%s/WGS_%s.%i.csv' % (input_mutations_folder, dataset_name, dataset_name, context), index_col=0)
         else:
             raise ValueError("Context %i is not supported." % context)

@@ -327,7 +327,7 @@ if __name__ == '__main__':
     parser.add_argument("-t", "--mutation_type", dest="mutation_type", default='',
                         help="set mutation type (SBS, DBS, ID, SV, CNV)")
     parser.add_argument("-c", "--context", dest="context", default=96, type=int,
-                        help="set SBS context (96, 192, 288, 1536)")
+                        help="set SBS context (96, 192, 288, 1536, 4608)")
     parser.add_argument("-s", "--signature_path", dest="signature_tables_path", default='signature_tables/',
                         help="set path to signature tables")
     parser.add_argument("-p", "--signature_prefix", dest="signatures_prefix", default='sigProfiler',
@@ -405,7 +405,7 @@ if __name__ == '__main__':
             index_col = [0,1]
         elif context in [192, 288]:
             index_col = [0,1,2]
-        elif context==1536:
+        elif context in [1536, 4608]:
             index_col = 0
         else:
             raise ValueError("Context %i is not supported." % context)
