@@ -20,7 +20,7 @@ params.SP_extractor_output_path = null // optional path to SigProfilerExtractor 
 params.SP_matrix_generator_output_path = null // optional path to SigProfilerMatrixGenerator output
 params.COSMIC_signatures = false // if set to true, COSMIC signatures are used form SigProfiler output, otherwise de-novo ones are used
 params.dataset = ['SIM_test'] // several datasets can be provided as long as input mutation tables are available
-params.mutation_types = ['SBS', 'DBS', 'ID'] // add or remove mutation types if needed
+params.mutation_types = ['SBS'] // add or remove mutation types if needed
 params.input_tables = "$baseDir/input_mutation_tables"
 params.SBS_context = 96 // 96, 192, 288 and 1536 context matrices can be provided (SBS only)
 params.number_of_samples = -1 // number of samples to analyse (-1 means all available)
@@ -54,7 +54,7 @@ params.show_nontranscribed_region = false // only wortks with higher contexts (2
 // bootstrap flag and method (binomial, multinomial, residuals, classic, bootstrap_residuals)
 params.perform_bootstrapping = true
 params.bootstrap_method = "binomial"
-params.number_of_bootstrapped_samples = 10 // at least 100 is recommended
+params.number_of_bootstrapped_samples = 100 // at least 100 is recommended
 params.confidence_level = 0.95 // specify the confidence level for CI calculation (default: 0.95)
 params.use_absolute_attributions = false // use absolute mutation counts in bootstrap analysis (relative by default)
 
@@ -110,6 +110,7 @@ log.info "help:                               ${params.help}"
 // add parameter values to log output (.nextflow.log)
 log.info params.collect { k,v -> "${k.padRight(34)}: $v" }.join("\n")
 
+
 if (params.SP_extractor_output_path) {
   process convert_signature_tables {
     publishDir "${params.signature_tables}", mode: 'move', overwrite: true
@@ -121,8 +122,6 @@ if (params.SP_extractor_output_path) {
     file '*.csv' into signatures_for_spectra
     file '*.csv' into signatures_for_NNLS
     file '*.csv' into signatures_for_NNLS_bootstrap
-    file '*.csv' into signatures_for_make_bootstrap_tables
-    file '*.csv' into signatures_for_plot_bootstrap
 
     script:
     """
@@ -131,13 +130,31 @@ if (params.SP_extractor_output_path) {
                                              -i ${input_path} -s ${params.signature_tables} -o "./"
     """
   }
+  if (!params.SP_matrix_generator_output_path) {
+    process convert_extractor_input_matrices {
+      publishDir "${params.input_tables}", mode: 'move', overwrite: true
+
+      input:
+      each dataset from params.dataset
+      path input_path from params.SP_extractor_output_path
+
+      output:
+      file '*/*.csv' into converted_SP_to_MSA_for_spectra
+      file '*/*.csv' into converted_SP_to_MSA_for_NNLS
+      file '*/*.csv' into converted_SP_to_MSA_for_NNLS_bootstrap
+
+      script:
+      """
+      python $baseDir/bin/convert_SP_to_MSA.py -E -d ${dataset} -t ${params.mutation_types.join(' ')} \
+                                              -i ${input_path} -s ${params.signature_tables} -o "./"
+      """
+    }
+  }
 } else {
   // placeholder channels for execution from existing input matrices
   signatures_for_spectra = Channel.value(1)
   signatures_for_NNLS = Channel.value(1)
   signatures_for_NNLS_bootstrap = Channel.value(1)
-  signatures_for_make_bootstrap_tables = Channel.value(1)
-  signatures_for_plot_bootstrap = Channel.value(1)
 }
 
 if (params.SP_matrix_generator_output_path) {
@@ -159,7 +176,7 @@ if (params.SP_matrix_generator_output_path) {
                                              -i ${input_path} -s ${params.signature_tables} -o "./"
     """
   }
-} else {
+} else if (!params.SP_extractor_output_path) {
   // placeholder channels for execution from existing input matrices
   converted_SP_to_MSA_for_spectra = Channel.value(1)
   converted_SP_to_MSA_for_NNLS = Channel.value(1)
@@ -347,7 +364,6 @@ process make_bootstrap_tables {
   input:
   set dataset, mutation_type from attribution_for_tables
   file bootstrap_weights from bootstrap_output_tables.collect()
-  file signatures from signatures_for_make_bootstrap_tables
 
   output:
   file("./${dataset}/CIs_${dataset}_${mutation_type}_bootstrap_output_${suffix}.csv") into final_outputs_post_bootstrap
@@ -385,7 +401,6 @@ process plot_bootstrap_attributions {
   input:
   set dataset, mutation_type from attribution_for_bootstrap_plots
   file bootstrap_attributions from attributions_per_sample.collect()
-  file signatures from signatures_for_plot_bootstrap
 
   output:
   file '*/*/bootstrap_plots/*.pdf' optional true
