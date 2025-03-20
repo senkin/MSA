@@ -173,15 +173,20 @@ if __name__ == '__main__':
                 input_files = glob.glob(input_path + '/%s*/Samples.txt' % mutation_type)
             else: # assume matrix generator output
                 input_files = glob.glob(input_path + '/%s/*%s*' % (mutation_type, mutation_type))
+            print('Considering input files: ', input_files)
             if not input_files:
                 raise ValueError("Can't find any files of mutation type %s in input path %s" % (mutation_type, input_path) )
             for file in input_files:
-                file_stem = Path(file).stem
+                if options.use_extractor_for_mutation_tables:
+                    mutation_type_with_context = Path(file).parent.name
+                else:
+                    mutation_type_with_context = Path(file).stem
+                print('Considering the mutation type/context %s in file %s' % (mutation_type_with_context, file))
                 if mutation_type=='SBS':
                     for context in contexts:
-                        if context==192 and not '384' in file_stem:
+                        if context==192 and not '384' in mutation_type_with_context:
                             continue
-                        if context!=192 and not str(context) in file_stem:
+                        if context!=192 and not str(context) in mutation_type_with_context:
                             continue
                         input_table = pd.read_csv(file, sep='\t', index_col=0)
                         print('Converting:', mutation_type, context, file)
@@ -195,13 +200,13 @@ if __name__ == '__main__':
                             new_filename = new_filename.replace('SBS384','SBS192')
                         input_table.to_csv(new_filename, sep = ',')
                 else:
-                    if mutation_type=='DBS' and not '78' in file_stem:
+                    if mutation_type=='DBS' and not '78' in mutation_type_with_context:
                         continue
-                    if mutation_type=='ID' and not '83' in file_stem:
+                    if mutation_type=='ID' and not '83' in mutation_type_with_context:
                         continue
-                    if mutation_type=='SV' and not '32' in file_stem:
+                    if mutation_type=='SV' and not '32' in mutation_type_with_context:
                         continue
-                    if mutation_type=='CNV' and not '48' in file_stem:
+                    if mutation_type=='CNV' and not '48' in mutation_type_with_context:
                         continue
                     # simply overwrite index for other mutation types (equality assumption)
                     print('Converting:', mutation_type, file)
