@@ -1,4 +1,4 @@
-// ./modules/plot_spectra/main.nf
+// modules/plot_spectra.nf
 
 // parameters for helper flags
 params.strands_flag = ''

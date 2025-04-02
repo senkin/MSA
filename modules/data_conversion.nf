@@ -1,4 +1,4 @@
-// ./modules/data_conversion/main.nf
+// modules/data_conversion.nf
 
 // parameters for helper flags
 params.strands_flag = ''
@@ -17,7 +17,13 @@ workflow convert_data_workflow {
     // Define and invoke the combined process
     process convert_data {
         tag "${convert_type}/${dataset}"
-        publishDir "${params.input_tables}", mode: 'move', overwrite: true
+        // publishDir "${params.input_tables}", mode: 'move', overwrite: true
+        // Dynamic publishDir based on convert_type
+        publishDir (
+            convert_type == 'signature_tables' ? "${params.signature_tables}" : "${params.input_tables}",
+            mode: 'move', 
+            overwrite: true
+        )
 
         input:
         val dataset
@@ -25,8 +31,10 @@ workflow convert_data_workflow {
         val convert_type
 
         output:
-        path '*.csv', emit: converted_signatures, optional: true
-        path '*/*.csv', emit: converted_output, optional: true
+        path '*.csv', emit: signatures_for_spectra, optional: true
+        path '*.csv', emit: signatures_for_unoptimised_NNLS, optional: true
+        path '*/*.csv', emit: converted_SP_to_MSA_for_spectra, optional: true
+        path '*/*.csv', emit: converted_SP_to_MSA_for_unoptimised_NNLS, optional: true
 
         script:
         if (convert_type == 'matrix_generator_matrices') {
@@ -56,7 +64,10 @@ workflow convert_data_workflow {
     // Invoke the process
     convert_data(dataset, input_path, convert_type)
 
-    // emit:
-    // // Emit the converted output
-    // converted_output
+    // Emit the converted output
+    emit:
+    signatures_for_spectra = convert_data.out.signatures_for_spectra
+    signatures_for_unoptimised_NNLS = convert_data.out.signatures_for_unoptimised_NNLS
+    converted_SP_to_MSA_for_spectra = convert_data.out.converted_SP_to_MSA_for_spectra
+    converted_SP_to_MSA_for_unoptimised_NNLS = convert_data.out.converted_SP_to_MSA_for_unoptimised_NNLS
 }

@@ -19,7 +19,7 @@ nextflow.enable.dsl = 2
 params.SP_extractor_output_path = null // optional path to SigProfilerExtractor output
 params.SP_matrix_generator_output_path = null // optional path to SigProfilerMatrixGenerator output
 params.COSMIC_signatures = false // if set to true, COSMIC signatures are used form SigProfiler output, otherwise de-novo ones are used
-params.dataset = ['SIM_test'] // several datasets can be provided as long as input mutation tables are available
+params.dataset = 'SIM_test' // dataset name. Input matrices to be provided in params.input_tables/params.dataset, unless SigProfiler inputs are used
 params.mutation_types = ['SBS'] // add or remove mutation types if needed
 params.input_tables = "$baseDir/input_mutation_tables"
 params.SBS_context = 96 // 96, 192, 288, 1536 context matrices can be provided (SBS only)
@@ -90,7 +90,7 @@ no_CI_for_penalties_flag = (params.no_CI_for_penalties) ? "--no_CI" : ''
 calculate_penalty_on_average_flag = (params.calculate_penalty_on_average) ? "--average" : ''
 prioritised_signatures_flag = (params.signatures_to_prioritise) ? "--signatures_to_prioritise " + params.signatures_to_prioritise.join(' ') : ''
 // override number of samples/variations for test run
-test_run = ((params.dataset == ['SIM_test']) || (params.dataset == 'SIM_test')) ? true : false
+test_run = (params.dataset == 'SIM_test') ? true : false
 number_of_bootstrapped_samples_in_optimisation = (test_run) ? 10 : params.number_of_bootstrapped_samples_in_optimisation
 number_of_bootstrapped_samples = (test_run) ? 10 : params.number_of_bootstrapped_samples
 number_of_simulated_samples = (test_run) ? 10 : params.number_of_simulated_samples
@@ -150,8 +150,13 @@ include { convert_data_workflow } from './modules/data_conversion' addParams(
     nontranscribed_flag: nontranscribed_flag,
     error_flag: error_flag,
     COSMIC_flag: COSMIC_flag,
-    signature_prefix: params.signature_prefix
+    signature_prefix: signature_prefix
 )
+
+// include NNLS workflows
+include { NNLS_workflow as UnoptimizedNNLS } from './modules/nnls'
+include { NNLS_workflow as OptimizedNNLS } from './modules/nnls' addParams(optimised: true)
+include { simulate_data_workflow } from './modules/simulations'
 
 // Main workflow
 workflow {
@@ -168,37 +173,91 @@ workflow {
         Channel.fromPath(defaultInputDir).set { signatures_for_unoptimised_NNLS }
     }
 
+    def converted_SP_to_MSA_for_unoptimised_NNLS = null
+    def converted_SP_to_MSA_for_spectra = null
+    def signatures_for_spectra = null
+    def signatures_for_unoptimised_NNLS = null
+
     if (params.SP_extractor_output_path) {
-        params.dataset.each { dataset ->
-            convert_data_workflow(dataset, params.SP_extractor_output_path, 'signature_tables')
+        convert_data_workflow(params.dataset, params.SP_extractor_output_path, 'signature_tables')
+        signatures_for_spectra = convert_data_workflow.out.signatures_for_spectra
+        signatures_for_unoptimised_NNLS = convert_data_workflow.out.signatures_for_unoptimised_NNLS
+        if (params.plot_signatures) {
+            params.mutation_types.each { mutation_type ->
+                plot_spectra_workflow(params.dataset, mutation_type, signatures_for_spectra, 'signatures')
+        }
         }
         if (!params.SP_matrix_generator_output_path) {
-            params.dataset.each { dataset ->
-                convert_data_workflow(dataset, params.SP_extractor_output_path, 'extractor_matrices')
+            convert_data_workflow(params.dataset, params.SP_extractor_output_path, 'extractor_matrices')
+            converted_SP_to_MSA_for_spectra = convert_data_workflow.out.converted_SP_to_MSA_for_spectra
+            converted_SP_to_MSA_for_unoptimised_NNLS = convert_data_workflow.out.converted_SP_to_MSA_for_unoptimised_NNLS
+            if (params.plot_input_spectra) {
+                params.mutation_types.each { mutation_type ->
+                plot_spectra_workflow(params.dataset, mutation_type, converted_SP_to_MSA_for_spectra, 'mutation_spectra')
+                }
             }
         }
-    }
-    if (params.SP_matrix_generator_output_path) {
-        params.dataset.each { dataset ->
-            convert_data_workflow(dataset, params.SP_matrix_generator_output_path, 'matrix_generator_matrices')
-        }
+    } else if (params.plot_signatures) {
+        params.mutation_types.each { mutation_type ->
+            plot_spectra_workflow(params.dataset, mutation_type, signatures_for_spectra, 'signatures')
+      }
     }
 
-    if (params.plot_input_spectra) {
-      params.dataset.each { dataset ->
-          params.mutation_types.each { mutation_type ->
-              plot_spectra_workflow(dataset, mutation_type, converted_SP_to_MSA_for_spectra, 'input_spectra')
-          }
-      }
+    if (params.SP_matrix_generator_output_path) {
+        convert_data_workflow(params.dataset, params.SP_matrix_generator_output_path, 'matrix_generator_matrices')
+        converted_SP_to_MSA_for_spectra = convert_data_workflow.out.converted_SP_to_MSA_for_spectra
+        converted_SP_to_MSA_for_unoptimised_NNLS = convert_data_workflow.out.converted_SP_to_MSA_for_unoptimised_NNLS
+        if (params.plot_input_spectra) {
+            params.mutation_types.each { mutation_type ->
+                plot_spectra_workflow(params.dataset, mutation_type, convert_data_workflow.out.converted_SP_to_MSA_for_spectra, 'mutation_spectra')
+            }
+        }
+    } else if ((params.plot_input_spectra) && (!params.SP_extractor_output_path)) {
+        params.mutation_types.each { mutation_type ->
+            plot_spectra_workflow(params.dataset, mutation_type, converted_SP_to_MSA_for_spectra, 'mutation_spectra')
+        }
+    }
+    print(converted_SP_to_MSA_for_unoptimised_NNLS)
+    print(signatures_for_unoptimised_NNLS)
+    // Initial unoptimized NNLS runs
+    params.mutation_types.each { mutation_type ->
+        UnoptimizedNNLS(
+            params.dataset,
+            mutation_type,
+            converted_SP_to_MSA_for_unoptimised_NNLS,
+            signatures_for_unoptimised_NNLS,
+            0,
+            0,
+            1
+        )
     }
     
-    if (params.plot_signatures) {
-      params.dataset.each { dataset ->
-          params.mutation_types.each { mutation_type ->
-              plot_spectra_workflow(dataset, mutation_type, signatures_for_spectra, 'signatures')
-          }
-      }
-    }
+    // // Simulation runs
+    // ch_unoptimised_outputs = UnoptimizedNNLS.out.mutations_table
+    //     .map { file -> 
+    //         def dataset = file.getParentFile().getName()
+    //         def mutation_type = file.getName().split('_')[2]
+    //         tuple(dataset, mutation_type, file) 
+    //     }
+
+    // simulate_data(
+    //     UnoptimizedNNLS.out.mutations_table.map { tuple(it[0], it[1]) },  // (dataset, mutation_type) pairs
+    //     ch_unoptimised_outputs.collect(),  // mutations tables
+    //     signatures_for_unoptimised_NNLS.first()  // signature files
+    // )
+    
+    // // Optimized NNLS runs (if enabled)
+    // if (!params.run_only_simulations) {
+    //     OptimizedNNLS(
+    //         "SIM_${params.dataset}",
+    //         params.mutation_types,
+    //         Channel.fromPath("$baseDir/output_tables/SIM_${params.dataset}/*.csv"),
+    //         signatures_for_unoptimised_NNLS,
+    //         params.weak_thresholds,
+    //         params.strong_thresholds,
+    //         params.number_of_bootstrapped_samples_in_optimisation
+    //     )
+    // }
 
     // convert_signature_tables | convert_extractor_input_matrices | plot_input_spectra | plot_signatures | run_unoptimised_model |
     // run_simulations | run_optimisation_NNLS | run_optimisation_NNLS_bootstrapping | make_optimisation_bootstrap_tables |
