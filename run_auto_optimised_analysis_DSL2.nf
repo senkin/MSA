@@ -20,7 +20,7 @@ params.SP_extractor_output_path = null // optional path to SigProfilerExtractor 
 params.SP_matrix_generator_output_path = null // optional path to SigProfilerMatrixGenerator output
 params.COSMIC_signatures = false // if set to true, COSMIC signatures are used form SigProfiler output, otherwise de-novo ones are used
 params.dataset = 'SIM_test' // dataset name. Input matrices to be provided in params.input_tables/params.dataset, unless SigProfiler inputs are used
-params.mutation_types = ['SBS'] // add or remove mutation types if needed
+params.mutation_types = ['SBS','DBS'] // add or remove mutation types if needed
 params.input_tables = "$baseDir/input_mutation_tables"
 params.SBS_context = 96 // 96, 192, 288, 1536 context matrices can be provided (SBS only)
 params.number_of_samples = -1 // number of samples to analyse (-1 means all available)
@@ -48,8 +48,8 @@ params.optimisation_NNLS_output_path = "$baseDir/outputs_optimisation"
 params.optimisation_plots_output_path = params.plots_output_path + "/optimisation_plots"
 params.optimised = true // if set to false, optimisation will run but not be used in final attributions
 params.optimisation_strategy = "removal" // optimisation strategy (removal, addition or add-remove)
-params.weak_thresholds = ['0.0000', '0.0001']//, '0.0002', '0.0003'] // range of L2 similarity decrease thresholds to be scanned, excluding weakest signatures - adjust if needed
-params.strong_thresholds = ['0.0000'] // range of L2 similarity increase thresholds to be scanned, including strongest signatures: only one is sufficient in default removal strategy
+params.weak_thresholds = [0, 0.0001]//, '0.0002', '0.0003'] // range of L2 similarity decrease thresholds to be scanned, excluding weakest signatures - adjust if needed
+params.strong_thresholds = [0] // range of L2 similarity increase thresholds to be scanned, including strongest signatures: only one is sufficient in default removal strategy
 params.bootstrap_method = "binomial" // bootstrap flag and method (binomial, multinomial, residuals, classic, bootstrap_residuals)
 params.number_of_bootstrapped_samples_in_optimisation = 100 // at least 100 is recommended
 params.number_of_bootstrapped_samples = 1000 // bootstrap variations in final attribution, at least 1000 is recommended
@@ -229,12 +229,33 @@ workflow {
             0,
             1
         )
+        simulate_data_workflow(
+            UnoptimizedNNLS.out.dataset_mutation_pairs,
+            UnoptimizedNNLS.out.mutations_table
+        )
+        params.weak_thresholds.each { weak_threshold ->
+            params.strong_thresholds.each { strong_threshold ->
+                OptimizedNNLS(
+                        params.dataset,
+                        mutation_type,
+                        simulate_data_workflow.out.all_simulation_outputs,
+                        signatures_for_unoptimised_NNLS,
+                        weak_threshold,
+                        strong_threshold,
+                        1
+                )
+            }
+        }
+        // OptimizedNNLS(
+        //     params.dataset,
+        //     mutation_type,
+        //     simulate_data_workflow.out.all_simulation_outputs,
+        //     signatures_for_unoptimised_NNLS,
+        //     0,
+        //     0,
+        //     1
+        // )
     }
-
-    simulate_data_workflow(
-        UnoptimizedNNLS.out.dataset_mutation_pairs,
-        UnoptimizedNNLS.out.mutations_table
-    )
  
 }
 

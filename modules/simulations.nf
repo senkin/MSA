@@ -62,7 +62,7 @@ workflow simulate_data_workflow {
     )
 
     emit:
-    simulation_outputs = simulate_data.out[8]  // (dataset, mutation_type) channel
-    simulation_outputs_for_bootstrap = simulate_data.out[9]  // (dataset, mutation_type) channel
-    all_simulation_outputs = simulate_data.out[0..7]  // All output files
+    simulation_outputs = simulate_data.out.simulation_outputs  // (dataset, mutation_type) channel
+    simulation_outputs_for_bootstrap = simulate_data.out.simulation_outputs_for_bootstrap  // (dataset, mutation_type) channel
+    all_simulation_outputs = simulate_data.out[0]  // All output files
 }

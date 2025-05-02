@@ -52,6 +52,7 @@ workflow NNLS_workflow {
         path "./${dataset}/output_${dataset}_${mutation_type}_stat_info.csv", emit: stat_info
         path "./${dataset}/output_${dataset}_${mutation_type}_fitted_values.csv", optional: true, emit: fitted_values
         path "./${dataset}/output_${dataset}_${mutation_type}_residuals.csv", optional: true, emit: residuals
+        tuple val(dataset), val(mutation_type), emit: dataset_mutation_pairs
 
         script:
         """
@@ -97,6 +98,7 @@ workflow NNLS_workflow {
     }
 
     emit:
+    dataset_mutation_pairs = run_NNLS.out.dataset_mutation_pairs
     mutations_table = run_NNLS.out.mutations_table
     weights_table = run_NNLS.out.weights_table
     stat_info = run_NNLS.out.stat_info
