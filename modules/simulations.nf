@@ -25,14 +25,7 @@ workflow simulate_data_workflow {
         // path signature_files
 
         output:
-        path "SIM_${dataset}/WGS_SIM_${dataset}.${params.SBS_context}.csv", optional: true
-        path "SIM_${dataset}/WGS_SIM_${dataset}.${mutation_type}.csv", optional: true
-        path "SIM_${dataset}/WGS_SIM_${dataset}.dinucs.csv", optional: true
-        path "SIM_${dataset}/WGS_SIM_${dataset}.indels.csv", optional: true
-        path "SIM_${dataset}/WGS_SIM_${dataset}.${params.SBS_context}.weights.csv", optional: true
-        path "SIM_${dataset}/WGS_SIM_${dataset}.${mutation_type}.weights.csv", optional: true
-        path "SIM_${dataset}/WGS_SIM_${dataset}.dinucs.weights.csv", optional: true
-        path "SIM_${dataset}/WGS_SIM_${dataset}.indels.weights.csv", optional: true
+        path "SIM_${dataset}/WGS_SIM_${dataset}.*.csv", optional: true
         tuple val(dataset), val(mutation_type), emit: simulation_outputs
         tuple val(dataset), val(mutation_type), emit: simulation_outputs_for_bootstrap
 
