@@ -7,7 +7,7 @@ import copy
 import time
 from scipy.optimize import nnls
 from scipy.spatial import distance
-from common_methods import make_folder_if_not_exists, calculate_similarity
+from common_methods import make_folder_if_not_exists, calculate_similarity, format_threshold
 
 def bootstrap_mutation_table(input_dataframe, method="classic", fitted=None, residuals=None):
     input_mutations = copy.deepcopy(input_dataframe)
@@ -526,7 +526,9 @@ if __name__ == '__main__':
     if args.add_suffix:
         output_path += '_%i_NNLS' % context
         if args.optimise_signatures:
-            output_path += '_%.4f_%.4f' % (args.weak_threshold, args.strong_threshold)
+            weak_str = format_threshold(args.weak_threshold)
+            strong_str = format_threshold(args.strong_threshold)
+            output_path += f'_{weak_str}_{strong_str}'
         else:
             output_path += '_unoptimised'
 

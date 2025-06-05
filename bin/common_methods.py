@@ -22,11 +22,22 @@ def is_tool(name):
     return which(name) is not None
 
 def make_folder_if_not_exists(folder):
+    """Create a folder if it does not exist"""
     if not os.path.exists(folder):
         try:
             os.makedirs(folder)
         except:
             warnings.warn("Could not create a folder %s" % folder)
+
+def format_threshold(threshold):
+    """Convert float threshold to clean string for filenames"""
+    if threshold == 0.0:
+        return "0"
+    elif threshold == int(threshold):
+        return str(int(threshold))
+    else:
+        # Remove trailing zeros and decimal point if not needed
+        return f"{threshold:.6f}".rstrip('0').rstrip('.')
 
 def merge_plots(input_plots_filenames, merged_plot_filename, merge_tool = 'pdfunite'):
     if is_tool(merge_tool):
