@@ -20,7 +20,7 @@ params.SP_extractor_output_path = null // optional path to SigProfilerExtractor 
 params.SP_matrix_generator_output_path = null // optional path to SigProfilerMatrixGenerator output
 params.COSMIC_signatures = false // if set to true, COSMIC signatures are used form SigProfiler output, otherwise de-novo ones are used
 params.dataset = 'SIM_test' // dataset name. Input matrices to be provided in params.input_tables/params.dataset, unless SigProfiler inputs are used
-params.mutation_types = ['SBS','DBS'] // add or remove mutation types if needed
+params.mutation_types = ['DBS'] // add or remove mutation types if needed
 params.input_tables = "$baseDir/input_mutation_tables"
 params.SBS_context = 96 // 96, 192, 288, 1536 context matrices can be provided (SBS only)
 params.number_of_samples = -1 // number of samples to analyse (-1 means all available)
@@ -156,6 +156,7 @@ include { convert_data_workflow } from './modules/data_conversion' addParams(
 // include NNLS workflows
 include { NNLS_workflow as UnoptimizedNNLS } from './modules/nnls'
 include { NNLS_workflow as OptimizedNNLS } from './modules/nnls' addParams(optimised: true)
+include { NNLS_bootstrap_workflow as OptimizedNNLSforBootstrap } from './modules/nnls' addParams(optimised: true)
 include { simulate_data_workflow } from './modules/simulations'
 
 // Main workflow
@@ -217,45 +218,51 @@ workflow {
             plot_spectra_workflow(params.dataset, mutation_type, converted_SP_to_MSA_for_spectra, 'mutation_spectra')
         }
     }
-
     // Initial unoptimized NNLS runs
     params.mutation_types.each { mutation_type ->
+        // Run unoptimized NNLS
         UnoptimizedNNLS(
             params.dataset,
             mutation_type,
             converted_SP_to_MSA_for_unoptimised_NNLS,
             signatures_for_unoptimised_NNLS,
-            0,
-            0,
-            1
+            0.0,      // weak_threshold (not used for unoptimized)
+            0.0,      // strong_threshold (not used for unoptimized)
+            1         // bootstrap_samples
         )
+        
+        // Run simulation workflow
         simulate_data_workflow(
             UnoptimizedNNLS.out.dataset_mutation_pairs,
             UnoptimizedNNLS.out.mutations_table
         )
+        
+        // Run optimized NNLS for each threshold combination
         params.weak_thresholds.each { weak_threshold ->
             params.strong_thresholds.each { strong_threshold ->
+                // Standard optimized NNLS
                 OptimizedNNLS(
-                        params.dataset,
-                        mutation_type,
-                        simulate_data_workflow.out.all_simulation_outputs,
-                        signatures_for_unoptimised_NNLS,
-                        weak_threshold,
-                        strong_threshold,
-                        1
+                    params.dataset,
+                    mutation_type,
+                    simulate_data_workflow.out.all_simulation_outputs,
+                    signatures_for_unoptimised_NNLS,
+                    weak_threshold,
+                    strong_threshold,
+                    1
+                )
+                
+                // Optimized NNLS with bootstrap
+                OptimizedNNLSforBootstrap(
+                    params.dataset,
+                    mutation_type,
+                    simulate_data_workflow.out.all_simulation_outputs,
+                    signatures_for_unoptimised_NNLS,
+                    weak_threshold,
+                    strong_threshold,
+                    number_of_bootstrapped_samples_in_optimisation
                 )
             }
         }
-        // OptimizedNNLS(
-        //     params.dataset,
-        //     mutation_type,
-        //     simulate_data_workflow.out.all_simulation_outputs,
-        //     signatures_for_unoptimised_NNLS,
-        //     0,
-        //     0,
-        //     1
-        // )
     }
- 
 }
 
