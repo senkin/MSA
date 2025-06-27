@@ -46,7 +46,7 @@ params.zero_inflation_threshold = 0.05 // set the relative threshold below which
 params.run_only_optimisation = false // set to true if only optimisation is required, without final attributions
 params.optimisation_NNLS_output_path = "$baseDir/outputs_optimisation"
 params.optimisation_plots_output_path = params.plots_output_path + "/optimisation_plots"
-params.optimised = true // if set to false, optimisation will run but not be used in final attributions
+// params.optimised = true // if set to false, optimisation will run but not be used in final attributions
 params.optimisation_strategy = "removal" // optimisation strategy (removal, addition or add-remove)
 params.weak_thresholds = [0, 0.0001]//, '0.0002', '0.0003'] // range of L2 similarity decrease thresholds to be scanned, excluding weakest signatures - adjust if needed
 params.strong_thresholds = [0] // range of L2 similarity increase thresholds to be scanned, including strongest signatures: only one is sufficient in default removal strategy
@@ -77,7 +77,7 @@ params.show_nontranscribed_region = false // only wortks with higher contexts (2
 params.signature_attribution_thresholds = 0..20
 
 // helper flags for scripts (automatic based on parameters)
-optimised_flag = (params.optimised) ? "-x" : ''
+// optimised_flag = (params.optimised) ? "-x" : ''
 abs_flag = (params.use_absolute_attributions) ? "-a" : ''
 suffix = (params.use_absolute_attributions) ? "abs_mutations" : 'weights'
 error_flag = (params.show_poisson_errors) ? "-e" : ''
@@ -154,13 +154,25 @@ include { convert_data_workflow } from './modules/data_conversion' addParams(
 )
 
 // include NNLS workflows
-include { NNLS_workflow as UnoptimizedNNLS } from './modules/nnls'
-include { NNLS_workflow as OptimizedNNLS } from './modules/nnls' addParams(optimised: true)
-include { NNLS_bootstrap_workflow as OptimizedNNLSforBootstrap } from './modules/nnls' addParams(optimised: true)
+// include { NNLS_workflow as UnoptimizedNNLS } from './modules/nnls'
+// include { NNLS_workflow as OptimizedNNLS } from './modules/nnls' addParams(optimised: true)
+// include { NNLS_bootstrap_workflow as OptimizedNNLSforBootstrap } from './modules/nnls' addParams(optimised: true)
+// include { simulate_data_workflow } from './modules/simulations'
+// include { BOOTSTRAP_TABLES_workflow } from './modules/bootstrap_tables'
+// include { OPTIMAL_PENALTIES_workflow } from './modules/optimal_penalties'
+include { NNLS_unoptimized_workflow as UnoptimizedNNLS } from './modules/nnls'
+include { NNLS_optimized_workflow as OptimizedNNLS } from './modules/nnls'
+include { NNLS_bootstrap_workflow as OptimizedNNLSforBootstrap } from './modules/nnls'
 include { simulate_data_workflow } from './modules/simulations'
+include { BOOTSTRAP_TABLES_workflow } from './modules/bootstrap_tables'
+include { OPTIMAL_PENALTIES_workflow } from './modules/optimal_penalties'
 
 // Main workflow
 workflow {
+    // Collect all dataset/mutation_type pairs and bootstrap outputs
+    all_dataset_mutation_pairs = Channel.empty()
+    all_bootstrap_outputs = Channel.empty()
+    
     // Create placeholder channels if SP_extractor_output_path and SP_matrix_generator_output_path are null
     if (params.SP_extractor_output_path == null && params.SP_matrix_generator_output_path == null) {
         // Create a dummy input directory
@@ -225,17 +237,23 @@ workflow {
             params.dataset,
             mutation_type,
             converted_SP_to_MSA_for_unoptimised_NNLS,
-            signatures_for_unoptimised_NNLS,
-            0.0,      // weak_threshold (not used for unoptimized)
-            0.0,      // strong_threshold (not used for unoptimized)
-            1         // bootstrap_samples
+            signatures_for_unoptimised_NNLS
+            // 0.0,      // weak_threshold (not used for unoptimized)
+            // 0.0,      // strong_threshold (not used for unoptimized)
+            // 1         // bootstrap_samples
         )
-        
+
         // Run simulation workflow
         simulate_data_workflow(
             UnoptimizedNNLS.out.dataset_mutation_pairs,
             UnoptimizedNNLS.out.mutations_table
         )
+        
+        // Collect dataset/mutation_type pairs
+        all_dataset_mutation_pairs = all_dataset_mutation_pairs.mix(
+            UnoptimizedNNLS.out.dataset_mutation_pairs
+        )
+        
         
         // Run optimized NNLS for each threshold combination
         params.weak_thresholds.each { weak_threshold ->
@@ -247,11 +265,10 @@ workflow {
                     simulate_data_workflow.out.all_simulation_outputs,
                     signatures_for_unoptimised_NNLS,
                     weak_threshold,
-                    strong_threshold,
-                    1
+                    strong_threshold
                 )
                 
-                // Optimized NNLS with bootstrap
+                // Optimized NNLS with bootstrap (runs 100 times)
                 OptimizedNNLSforBootstrap(
                     params.dataset,
                     mutation_type,
@@ -261,8 +278,29 @@ workflow {
                     strong_threshold,
                     number_of_bootstrapped_samples_in_optimisation
                 )
+                // Collect bootstrap outputs
+                all_bootstrap_outputs = all_bootstrap_outputs.mix(
+                    OptimizedNNLSforBootstrap.out.bootstrap_indices
+                )
             }
         }
     }
+
+    // Generate bootstrap tables after all bootstrap runs complete
+    BOOTSTRAP_TABLES_workflow(
+        all_dataset_mutation_pairs.unique(),
+        all_bootstrap_outputs,
+        params.weak_thresholds,
+        params.strong_thresholds,
+        number_of_bootstrapped_samples_in_optimisation
+    )
+    
+    // Calculate optimal penalties after bootstrap tables are generated
+    OPTIMAL_PENALTIES_workflow(
+        BOOTSTRAP_TABLES_workflow.out.bootstrap_tables,
+        all_dataset_mutation_pairs.unique(),
+        params.weak_thresholds,
+        params.strong_thresholds
+    )
 }
 
