@@ -1,5 +1,7 @@
 // modules/nnls.nf
 
+def signature_prefix = (params.SP_extractor_output_path) ? params.signature_prefix + "_conv" : params.signature_prefix
+
 // Unoptimized NNLS workflow
 workflow NNLS_unoptimized_workflow {
     take:
@@ -31,7 +33,7 @@ workflow NNLS_unoptimized_workflow {
         script:
         """
         python $baseDir/bin/run_NNLS.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} \\
-            -p ${params.signature_prefix} -i ${params.input_tables} -s ${params.signature_tables} -o "./" \\
+            -p ${signature_prefix} -i ${params.input_tables} -s ${params.signature_tables} -o "./" \\
             -n ${params.number_of_samples}
         """
     }
@@ -110,7 +112,7 @@ workflow NNLS_optimized_workflow {
         
         # Run NNLS analysis
         python $baseDir/bin/run_NNLS.py -d SIM_${dataset} -t ${mutation_type} -c ${params.SBS_context} \\
-            -p ${params.signature_prefix} --optimisation_strategy ${params.optimisation_strategy} \\
+            -p ${signature_prefix} --optimisation_strategy ${params.optimisation_strategy} \\
             -W ${weak_threshold} -S ${strong_threshold} \\
             -i $baseDir/output_tables -s ${params.signature_tables} \\
             -o "./" -x --add_suffix
@@ -196,7 +198,7 @@ workflow NNLS_bootstrap_workflow {
             --optimisation_strategy ${params.optimisation_strategy} \\
             --bootstrap_method ${params.bootstrap_method} \\
             -W ${weak_threshold} -S ${strong_threshold} --add_suffix \\
-            -p ${params.signature_prefix} -i $baseDir/output_tables -s ${params.signature_tables} -o "./"
+            -p ${signature_prefix} -i $baseDir/output_tables -s ${params.signature_tables} -o "./"
         
         # Create bootstrap output directory and move files
         mkdir -p SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output
@@ -232,4 +234,132 @@ workflow NNLS_bootstrap_workflow {
     weights_tables = run_bootstrap_NNLS.out.weights_table
     stat_infos = run_bootstrap_NNLS.out.stat_info
     bootstrap_indices = run_bootstrap_NNLS.out.bootstrap_indices
+}
+
+// Final NNLS workflow using optimal penalties (reuses existing process logic)
+workflow FINAL_NNLS_workflow {
+    take:
+    penalties_for_attribution  // tuple of (dataset, mutation_type)
+    optimal_weak_penalty_files // optimal weak penalty files  
+    optimal_strong_penalty_files // optimal strong penalty files
+    input_files
+    signature_files
+    
+    main:
+    // Simple final NNLS process using penalty files directly
+    process run_final_NNLS {
+        tag "${mutation_type}/${dataset}"
+        publishDir "$baseDir/output_tables", mode: 'copy', overwrite: true
+        
+        input:
+        tuple val(dataset), val(mutation_type)
+        path weak_penalty
+        path strong_penalty
+        path input_files
+        path signature_files
+        
+        output:
+        path "./${dataset}/output_${dataset}_${mutation_type}_mutations_table.csv", emit: mutations_table
+        path "./${dataset}/output_${dataset}_${mutation_type}_weights_table.csv", emit: weights_table
+        path "./${dataset}/output_${dataset}_${mutation_type}_stat_info.csv", emit: stat_info
+        path "./${dataset}/output_${dataset}_${mutation_type}_fitted_values.csv", emit: fitted_values
+        path "./${dataset}/output_${dataset}_${mutation_type}_residuals.csv", emit: residuals
+        tuple val(dataset), val(mutation_type), emit: dataset_mutation_pairs
+        
+        when:
+        !params.run_only_optimisation
+        
+        script:
+        def optimised_flag = params.optimised ? "-x" : ""
+        """
+        python $baseDir/bin/run_NNLS.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \\
+            --optimisation_strategy ${params.optimisation_strategy} \\
+            -W `< ${weak_penalty}` -S `< ${strong_penalty}` -n ${params.number_of_samples} \\
+            -p ${signature_prefix} -i ${params.input_tables} -s ${params.signature_tables} -o "./"
+        
+        # Copy residuals and fitted values back to input tables
+        cp ${dataset}/output_${dataset}_${mutation_type}_residuals.csv ${params.input_tables}/${dataset}/
+        cp ${dataset}/output_${dataset}_${mutation_type}_fitted_values.csv ${params.input_tables}/${dataset}/
+        """
+    }
+    
+    run_final_NNLS(
+        penalties_for_attribution,
+        optimal_weak_penalty_files,
+        optimal_strong_penalty_files,
+        input_files,
+        signature_files
+    )
+    
+    emit:
+    dataset_mutation_pairs = run_final_NNLS.out.dataset_mutation_pairs
+    mutations_table = run_final_NNLS.out.mutations_table
+    weights_table = run_final_NNLS.out.weights_table
+    stat_info = run_final_NNLS.out.stat_info
+    fitted_values = run_final_NNLS.out.fitted_values
+    residuals = run_final_NNLS.out.residuals
+}
+
+// Final bootstrap workflow using optimal penalties
+workflow FINAL_NNLS_BOOTSTRAP_workflow {
+    take:
+    penalties_for_attribution  // tuple of (dataset, mutation_type)
+    optimal_weak_penalty_files // optimal weak penalty files
+    optimal_strong_penalty_files // optimal strong penalty files
+    input_files
+    signature_files
+    num_bootstrap_samples
+    
+    main:
+    // Simple bootstrap process using penalty files directly
+    process run_final_bootstrap_NNLS {
+        tag "${mutation_type}/${dataset}/${bootstrap_index}"
+        publishDir "$baseDir/output_tables", mode: 'copy', overwrite: true
+        
+        input:
+        tuple val(dataset), val(mutation_type)
+        path weak_penalty
+        path strong_penalty
+        path input_files
+        path signature_files
+        each bootstrap_index
+        
+        output:
+        path "./${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_${bootstrap_index}_mutations_table.csv", emit: mutations_table
+        path "./${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_${bootstrap_index}_stat_info.csv", emit: stat_info
+        path "./${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_${bootstrap_index}_weights_table.csv", emit: weights_table
+        val bootstrap_index, emit: bootstrap_indices
+        
+        when:
+        !params.run_only_optimisation
+        
+        script:
+        def optimised_flag = params.optimised ? "-x" : ""
+        """
+        python $baseDir/bin/run_NNLS.py -B -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \\
+            --optimisation_strategy ${params.optimisation_strategy} --bootstrap_method ${params.bootstrap_method} \\
+            -W `< ${weak_penalty}` -S `< ${strong_penalty}` -n ${params.number_of_samples} \\
+            -p ${signature_prefix} -i ${params.input_tables} -s ${params.signature_tables} -o "./"
+        
+        mkdir -p ${dataset}/bootstrap_output
+        mv ${dataset}/output_${dataset}_${mutation_type}_mutations_table.csv ${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_${bootstrap_index}_mutations_table.csv
+        mv ${dataset}/output_${dataset}_${mutation_type}_weights_table.csv ${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_${bootstrap_index}_weights_table.csv
+        mv ${dataset}/output_${dataset}_${mutation_type}_stat_info.csv ${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_${bootstrap_index}_stat_info.csv
+        """
+    }
+    
+    run_final_bootstrap_NNLS(
+        penalties_for_attribution,
+        optimal_weak_penalty_files,
+        optimal_strong_penalty_files,
+        input_files,
+        signature_files,
+        Channel.from(1..num_bootstrap_samples)
+    )
+    
+    emit:
+    mutations_tables = run_final_bootstrap_NNLS.out.mutations_table
+    stat_infos = run_final_bootstrap_NNLS.out.stat_info
+    weights_tables = run_final_bootstrap_NNLS.out.weights_table
+    bootstrap_indices = run_final_bootstrap_NNLS.out.bootstrap_indices
 }

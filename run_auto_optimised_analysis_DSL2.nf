@@ -20,7 +20,7 @@ params.SP_extractor_output_path = null // optional path to SigProfilerExtractor 
 params.SP_matrix_generator_output_path = null // optional path to SigProfilerMatrixGenerator output
 params.COSMIC_signatures = false // if set to true, COSMIC signatures are used form SigProfiler output, otherwise de-novo ones are used
 params.dataset = 'SIM_test' // dataset name. Input matrices to be provided in params.input_tables/params.dataset, unless SigProfiler inputs are used
-params.mutation_types = ['DBS'] // add or remove mutation types if needed
+params.mutation_types = ['SBS'] // add or remove mutation types if needed
 params.input_tables = "$baseDir/input_mutation_tables"
 params.SBS_context = 96 // 96, 192, 288, 1536 context matrices can be provided (SBS only)
 params.number_of_samples = -1 // number of samples to analyse (-1 means all available)
@@ -46,7 +46,7 @@ params.zero_inflation_threshold = 0.05 // set the relative threshold below which
 params.run_only_optimisation = false // set to true if only optimisation is required, without final attributions
 params.optimisation_NNLS_output_path = "$baseDir/outputs_optimisation"
 params.optimisation_plots_output_path = params.plots_output_path + "/optimisation_plots"
-// params.optimised = true // if set to false, optimisation will run but not be used in final attributions
+params.optimised = true // if set to false, optimisation will run but not be used in final attributions
 params.optimisation_strategy = "removal" // optimisation strategy (removal, addition or add-remove)
 params.weak_thresholds = [0, 0.0001]//, '0.0002', '0.0003'] // range of L2 similarity decrease thresholds to be scanned, excluding weakest signatures - adjust if needed
 params.strong_thresholds = [0] // range of L2 similarity increase thresholds to be scanned, including strongest signatures: only one is sufficient in default removal strategy
@@ -77,7 +77,7 @@ params.show_nontranscribed_region = false // only wortks with higher contexts (2
 params.signature_attribution_thresholds = 0..20
 
 // helper flags for scripts (automatic based on parameters)
-// optimised_flag = (params.optimised) ? "-x" : ''
+optimised_flag = (params.optimised) ? "-x" : ''
 abs_flag = (params.use_absolute_attributions) ? "-a" : ''
 suffix = (params.use_absolute_attributions) ? "abs_mutations" : 'weights'
 error_flag = (params.show_poisson_errors) ? "-e" : ''
@@ -88,14 +88,13 @@ signature_prefix = (params.SP_extractor_output_path) ? params.signature_prefix +
 noise_flag = (params.add_noise) ? "-z" : ''
 no_CI_for_penalties_flag = (params.no_CI_for_penalties) ? "--no_CI" : ''
 calculate_penalty_on_average_flag = (params.calculate_penalty_on_average) ? "--average" : ''
-prioritised_signatures_flag = (params.signatures_to_prioritise) ? "--signatures_to_prioritise " + params.signatures_to_prioritise.join(' ') : ''
 // override number of samples/variations for test run
 test_run = (params.dataset == 'SIM_test') ? true : false
 number_of_bootstrapped_samples_in_optimisation = (test_run) ? 10 : params.number_of_bootstrapped_samples_in_optimisation
 number_of_bootstrapped_samples = (test_run) ? 10 : params.number_of_bootstrapped_samples
 number_of_simulated_samples = (test_run) ? 10 : params.number_of_simulated_samples
-weak_thresholds = (test_run) ? ['0.0000', '0.0100', '0.0200'] : params.weak_thresholds
-strong_thresholds = (test_run) ? ['0.0000'] : params.strong_thresholds
+weak_thresholds = (test_run) ? [0, 0.01, 0.02] : params.weak_thresholds
+strong_thresholds = (test_run) ? [0] : params.strong_thresholds
 mutation_types = (test_run) ? ['SBS', 'DBS', 'ID'] : params.mutation_types
 
 params.help = null
@@ -137,14 +136,20 @@ log.info "help:                               ${params.help}"
 // add parameter values to log output (.nextflow.log)
 log.info params.collect { k,v -> "${k.padRight(34)}: $v" }.join("\n")
 
-// Include the plotting module and pass helper flags
-include { plot_spectra_workflow } from './modules/plot_spectra' addParams(
+
+// Include modules
+include { plot_spectra_workflow } from './modules/plotting' addParams(
     strands_flag: strands_flag,
     nontranscribed_flag: nontranscribed_flag,
     signature_prefix: signature_prefix
 )
 
-// Include the SP -> MSA data conversion module and pass helper flags
+include { BOOTSTRAP_ATTRIBUTIONS_PLOTS_workflow } from './modules/plotting'
+include { METRICS_PLOTS_workflow } from './modules/plotting'
+include { FITTED_SPECTRA_PLOTS_workflow } from './modules/plotting'
+include { RESIDUALS_PLOTS_workflow } from './modules/plotting'
+include { ALL_FINAL_PLOTS_workflow } from './modules/plotting'
+
 include { convert_data_workflow } from './modules/data_conversion' addParams(
     strands_flag: strands_flag,
     nontranscribed_flag: nontranscribed_flag,
@@ -153,94 +158,88 @@ include { convert_data_workflow } from './modules/data_conversion' addParams(
     signature_prefix: signature_prefix
 )
 
-// include NNLS workflows
-// include { NNLS_workflow as UnoptimizedNNLS } from './modules/nnls'
-// include { NNLS_workflow as OptimizedNNLS } from './modules/nnls' addParams(optimised: true)
-// include { NNLS_bootstrap_workflow as OptimizedNNLSforBootstrap } from './modules/nnls' addParams(optimised: true)
-// include { simulate_data_workflow } from './modules/simulations'
-// include { BOOTSTRAP_TABLES_workflow } from './modules/bootstrap_tables'
-// include { OPTIMAL_PENALTIES_workflow } from './modules/optimal_penalties'
 include { NNLS_unoptimized_workflow as UnoptimizedNNLS } from './modules/nnls'
 include { NNLS_optimized_workflow as OptimizedNNLS } from './modules/nnls'
 include { NNLS_bootstrap_workflow as OptimizedNNLSforBootstrap } from './modules/nnls'
+include { FINAL_NNLS_workflow } from './modules/nnls'
+include { FINAL_NNLS_BOOTSTRAP_workflow } from './modules/nnls'
 include { simulate_data_workflow } from './modules/simulations'
 include { BOOTSTRAP_TABLES_workflow } from './modules/bootstrap_tables'
+include { FINAL_BOOTSTRAP_TABLES_workflow } from './modules/bootstrap_tables'
 include { OPTIMAL_PENALTIES_workflow } from './modules/optimal_penalties'
+include { OPTIMISATION_PLOTS_workflow } from './modules/optimisation_plots'
 
 // Main workflow
 workflow {
-    // Collect all dataset/mutation_type pairs and bootstrap outputs
-    all_dataset_mutation_pairs = Channel.empty()
-    all_bootstrap_outputs = Channel.empty()
-    
-    // Create placeholder channels if SP_extractor_output_path and SP_matrix_generator_output_path are null
-    if (params.SP_extractor_output_path == null && params.SP_matrix_generator_output_path == null) {
-        // Create a dummy input directory
-        def defaultInputDir = file("${params.signature_tables}")
-        defaultInputDir.mkdirs()
-
-        // Emit the input directory as a channel
-        Channel.fromPath(defaultInputDir).set { converted_SP_to_MSA_for_spectra }
-        Channel.fromPath(defaultInputDir).set { converted_SP_to_MSA_for_unoptimised_NNLS }
-        Channel.fromPath(defaultInputDir).set { signatures_for_spectra }
-        Channel.fromPath(defaultInputDir).set { signatures_for_unoptimised_NNLS }
-    }
-
-    def converted_SP_to_MSA_for_unoptimised_NNLS = null
-    def converted_SP_to_MSA_for_spectra = null
-    def signatures_for_spectra = null
-    def signatures_for_unoptimised_NNLS = null
-
+    // Set up input channels based on parameters
     if (params.SP_extractor_output_path) {
+        // Convert SigProfiler extractor output
         convert_data_workflow(params.dataset, params.SP_extractor_output_path, 'signature_tables')
         signatures_for_spectra = convert_data_workflow.out.signatures_for_spectra
         signatures_for_unoptimised_NNLS = convert_data_workflow.out.signatures_for_unoptimised_NNLS
+        
+        // Plot signatures if requested
         if (params.plot_signatures) {
-            params.mutation_types.each { mutation_type ->
+            for (mutation_type in params.mutation_types) {
                 plot_spectra_workflow(params.dataset, mutation_type, signatures_for_spectra, 'signatures')
+            }
         }
-        }
+        
         if (!params.SP_matrix_generator_output_path) {
+            // Convert extractor matrices
             convert_data_workflow(params.dataset, params.SP_extractor_output_path, 'extractor_matrices')
             converted_SP_to_MSA_for_spectra = convert_data_workflow.out.converted_SP_to_MSA_for_spectra
             converted_SP_to_MSA_for_unoptimised_NNLS = convert_data_workflow.out.converted_SP_to_MSA_for_unoptimised_NNLS
+            
             if (params.plot_input_spectra) {
-                params.mutation_types.each { mutation_type ->
-                plot_spectra_workflow(params.dataset, mutation_type, converted_SP_to_MSA_for_spectra, 'mutation_spectra')
+                for (mutation_type in params.mutation_types) {
+                    plot_spectra_workflow(params.dataset, mutation_type, converted_SP_to_MSA_for_spectra, 'mutation_spectra')
                 }
             }
         }
-    } else if (params.plot_signatures) {
-        params.mutation_types.each { mutation_type ->
-            plot_spectra_workflow(params.dataset, mutation_type, signatures_for_spectra, 'signatures')
-      }
+    } else {
+        // Use default signature tables
+        signatures_for_spectra = "${params.signature_tables}"
+        signatures_for_unoptimised_NNLS = "${params.signature_tables}"
+        
+        if (params.plot_signatures) {
+            for (mutation_type in params.mutation_types) {
+                plot_spectra_workflow(params.dataset, mutation_type, signatures_for_spectra, 'signatures')
+            }
+        }
     }
 
     if (params.SP_matrix_generator_output_path) {
+        // Convert matrix generator output
         convert_data_workflow(params.dataset, params.SP_matrix_generator_output_path, 'matrix_generator_matrices')
         converted_SP_to_MSA_for_spectra = convert_data_workflow.out.converted_SP_to_MSA_for_spectra
         converted_SP_to_MSA_for_unoptimised_NNLS = convert_data_workflow.out.converted_SP_to_MSA_for_unoptimised_NNLS
+        
         if (params.plot_input_spectra) {
-            params.mutation_types.each { mutation_type ->
-                plot_spectra_workflow(params.dataset, mutation_type, convert_data_workflow.out.converted_SP_to_MSA_for_spectra, 'mutation_spectra')
+            for (mutation_type in params.mutation_types) {
+                plot_spectra_workflow(params.dataset, mutation_type, converted_SP_to_MSA_for_spectra, 'mutation_spectra')
             }
         }
-    } else if ((params.plot_input_spectra) && (!params.SP_extractor_output_path)) {
-        params.mutation_types.each { mutation_type ->
-            plot_spectra_workflow(params.dataset, mutation_type, converted_SP_to_MSA_for_spectra, 'mutation_spectra')
+    } else if (!params.SP_extractor_output_path) {
+        // Use default input tables
+        converted_SP_to_MSA_for_spectra = "${params.input_tables}"
+        converted_SP_to_MSA_for_unoptimised_NNLS = "${params.input_tables}"
+        
+        if (params.plot_input_spectra) {
+            for (mutation_type in params.mutation_types) {
+                plot_spectra_workflow(params.dataset, mutation_type, converted_SP_to_MSA_for_spectra, 'mutation_spectra')
+            }
         }
     }
-    // Initial unoptimized NNLS runs
-    params.mutation_types.each { mutation_type ->
+
+    // Process each mutation type sequentially to avoid channel conflicts
+    for (mutation_type in params.mutation_types) {
         // Run unoptimized NNLS
         UnoptimizedNNLS(
             params.dataset,
             mutation_type,
             converted_SP_to_MSA_for_unoptimised_NNLS,
             signatures_for_unoptimised_NNLS
-            // 0.0,      // weak_threshold (not used for unoptimized)
-            // 0.0,      // strong_threshold (not used for unoptimized)
-            // 1         // bootstrap_samples
         )
 
         // Run simulation workflow
@@ -249,15 +248,9 @@ workflow {
             UnoptimizedNNLS.out.mutations_table
         )
         
-        // Collect dataset/mutation_type pairs
-        all_dataset_mutation_pairs = all_dataset_mutation_pairs.mix(
-            UnoptimizedNNLS.out.dataset_mutation_pairs
-        )
-        
-        
         // Run optimized NNLS for each threshold combination
-        params.weak_thresholds.each { weak_threshold ->
-            params.strong_thresholds.each { strong_threshold ->
+        for (weak_threshold in weak_thresholds) {
+            for (strong_threshold in strong_thresholds) {
                 // Standard optimized NNLS
                 OptimizedNNLS(
                     params.dataset,
@@ -268,7 +261,7 @@ workflow {
                     strong_threshold
                 )
                 
-                // Optimized NNLS with bootstrap (runs 100 times)
+                // Optimized NNLS with bootstrap
                 OptimizedNNLSforBootstrap(
                     params.dataset,
                     mutation_type,
@@ -278,29 +271,70 @@ workflow {
                     strong_threshold,
                     number_of_bootstrapped_samples_in_optimisation
                 )
-                // Collect bootstrap outputs
-                all_bootstrap_outputs = all_bootstrap_outputs.mix(
-                    OptimizedNNLSforBootstrap.out.bootstrap_indices
-                )
             }
         }
-    }
+        
+        // Generate bootstrap tables after ALL optimized runs complete
+        // Wait for both OptimizedNNLS and OptimizedNNLSforBootstrap to finish
+        BOOTSTRAP_TABLES_workflow(
+            UnoptimizedNNLS.out.dataset_mutation_pairs,
+            Channel.empty()
+                .mix(OptimizedNNLS.out.dataset_mutation_pairs)
+                .mix(OptimizedNNLSforBootstrap.out.bootstrap_indices)
+                .collect(),
+            weak_thresholds,
+            strong_thresholds,
+            number_of_bootstrapped_samples_in_optimisation
+        )
+        
+        // Calculate optimal penalties
+        OPTIMAL_PENALTIES_workflow(
+            BOOTSTRAP_TABLES_workflow.out.bootstrap_tables,
+            UnoptimizedNNLS.out.dataset_mutation_pairs,
+            weak_thresholds,
+            strong_thresholds
+        )
+        
+        // Generate optimization plots
+        OPTIMISATION_PLOTS_workflow(
+            OPTIMAL_PENALTIES_workflow.out.penalties_for_optimisation_plotting,
+            weak_thresholds,
+            strong_thresholds
+        )
+        
+        // Run final NNLS with optimal penalties
+        FINAL_NNLS_workflow(
+            OPTIMAL_PENALTIES_workflow.out.penalties_for_central_NNLS_attribution,
+            OPTIMAL_PENALTIES_workflow.out.optimal_weak_penalty,
+            OPTIMAL_PENALTIES_workflow.out.optimal_strong_penalty,
+            converted_SP_to_MSA_for_unoptimised_NNLS,
+            signatures_for_unoptimised_NNLS
+        )
+        
+        // Run final bootstrap NNLS with optimal penalties
+        FINAL_NNLS_BOOTSTRAP_workflow(
+            OPTIMAL_PENALTIES_workflow.out.penalties_for_bootstrap_NNLS_attribution,
+            OPTIMAL_PENALTIES_workflow.out.optimal_weak_penalty,
+            OPTIMAL_PENALTIES_workflow.out.optimal_strong_penalty,
+            converted_SP_to_MSA_for_unoptimised_NNLS,
+            signatures_for_unoptimised_NNLS,
+            number_of_bootstrapped_samples
+        )
 
-    // Generate bootstrap tables after all bootstrap runs complete
-    BOOTSTRAP_TABLES_workflow(
-        all_dataset_mutation_pairs.unique(),
-        all_bootstrap_outputs,
-        params.weak_thresholds,
-        params.strong_thresholds,
-        number_of_bootstrapped_samples_in_optimisation
-    )
-    
-    // Calculate optimal penalties after bootstrap tables are generated
-    OPTIMAL_PENALTIES_workflow(
-        BOOTSTRAP_TABLES_workflow.out.bootstrap_tables,
-        all_dataset_mutation_pairs.unique(),
-        params.weak_thresholds,
-        params.strong_thresholds
-    )
+        // Generate final bootstrap tables after final bootstrap NNLS completes
+        FINAL_BOOTSTRAP_TABLES_workflow(
+            FINAL_NNLS_workflow.out.dataset_mutation_pairs,
+            FINAL_NNLS_BOOTSTRAP_workflow.out.bootstrap_indices,
+            number_of_bootstrapped_samples,
+            suffix
+        )
+
+        // Generate final plots
+        ALL_FINAL_PLOTS_workflow(
+            FINAL_NNLS_workflow.out.dataset_mutation_pairs,
+            FINAL_BOOTSTRAP_TABLES_workflow.out.attributions_per_sample,
+            FINAL_BOOTSTRAP_TABLES_workflow.out.signature_prevalences
+        )
+    }
 }
 

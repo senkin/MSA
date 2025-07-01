@@ -1,11 +1,11 @@
 // modules/data_conversion.nf
 
 // parameters for helper flags
-params.strands_flag = ''
-params.nontranscribed_flag = ''
-params.error_flag = ''
-params.COSMIC_flag = ''
-params.signature_prefix = 'sigProfiler'
+// params.strands_flag = ''
+// params.nontranscribed_flag = ''
+// params.error_flag = ''
+// params.COSMIC_flag = ''
+def signature_prefix = (params.SP_extractor_output_path) ? params.signature_prefix + "_conv" : params.signature_prefix
 
 workflow convert_data_workflow {
     take:
@@ -50,7 +50,7 @@ workflow convert_data_workflow {
         } else if (convert_type == 'signature_tables') {
             """
             python $baseDir/bin/convert_SP_to_MSA.py -S -t ${params.mutation_types.join(' ')} \
-                                                     -n ${params.signature_prefix} ${params.COSMIC_flag} \
+                                                     -n ${signature_prefix} ${params.COSMIC_flag} \
                                                      -i ${input_path} -s ${params.signature_tables} -o "./"
             """
         } else {
