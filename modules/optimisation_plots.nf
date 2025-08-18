@@ -1,6 +1,6 @@
 // modules/optimization_plots.nf
 
-def signature_prefix = (params.SP_extractor_output_path) ? params.signature_prefix + "_conv" : params.signature_prefix
+// def signature_prefix = (params.SP_extractor_output_path) ? params.signature_prefix + "_conv" : params.signature_prefix
 
 workflow OPTIMISATION_PLOTS_workflow {
     take:
@@ -36,8 +36,8 @@ workflow OPTIMISATION_PLOTS_workflow {
             -W ${weak_thresholds_list.join(' ')} \\
             -S ${strong_thresholds_list.join(' ')} \\
             -T ${params.signature_attribution_thresholds.join(' ')} \\
-            --signature_path ${params.signature_tables} \\
-            -p ${signature_prefix}
+            --signature_path ${params.temp_path}/signature_tables \\
+            -p ${params.signature_prefix}
         """
     }
     

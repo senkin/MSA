@@ -1,4 +1,4 @@
-def signature_prefix = (params.SP_extractor_output_path) ? params.signature_prefix + "_conv" : params.signature_prefix
+// def signature_prefix = (params.SP_extractor_output_path) ? params.signature_prefix + "_conv" : params.signature_prefix
 
 workflow OPTIMAL_PENALTIES_workflow {
     take:
@@ -36,7 +36,7 @@ workflow OPTIMAL_PENALTIES_workflow {
         
         """
         python $baseDir/bin/calculate_optimal_penalties.py -d SIM_${dataset} -t ${mutation_type} \\
-            -I $baseDir/output_tables/SIM_${dataset} \\
+            -I ${params.temp_path}/output_tables/SIM_${dataset} \\
             -i ${params.optimisation_NNLS_output_path} -o "./" \\
             -c ${params.SBS_context} \\
             ${no_CI_for_penalties_flag} \\
@@ -46,8 +46,8 @@ workflow OPTIMAL_PENALTIES_workflow {
             -T ${params.metric_threshold} \\
             -W ${weak_thresholds_list.join(' ')} \\
             -S ${strong_thresholds_list.join(' ')} \\
-            --signature_path ${params.signature_tables} \\
-            -p ${signature_prefix}
+            --signature_path ${params.temp_path}/signature_tables \\
+            -p ${params.signature_prefix}
         """
     }
     

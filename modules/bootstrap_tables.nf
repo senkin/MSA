@@ -1,6 +1,6 @@
 // modules/bootstrap_tables.nf
 
-def signature_prefix = (params.SP_extractor_output_path) ? params.signature_prefix + "_conv" : params.signature_prefix
+// def signature_prefix = (params.SP_extractor_output_path) ? params.signature_prefix + "_conv" : params.signature_prefix
 
 workflow BOOTSTRAP_TABLES_workflow {
     take:
@@ -30,9 +30,9 @@ workflow BOOTSTRAP_TABLES_workflow {
         
         script:
         """
-        python $baseDir/bin/make_bootstrap_tables.py -d SIM_${dataset} -t ${mutation_type} -p ${signature_prefix} \\
+        python $baseDir/bin/make_bootstrap_tables.py -d SIM_${dataset} -t ${mutation_type} -p ${params.signature_prefix} \\
             --suffix ${weak_threshold}_${strong_threshold} -l ${params.confidence_level} \\
-            -c ${params.SBS_context} -S ${params.signature_tables} \\
+            -c ${params.SBS_context} -S ${params.temp_path}/signature_tables \\
             -T ${params.signature_attribution_thresholds.join(' ')} \\
             -i ${params.optimisation_NNLS_output_path} -o "./" -n ${num_bootstrap_samples}
         """
@@ -72,7 +72,7 @@ workflow FINAL_BOOTSTRAP_TABLES_workflow {
     // Process to make final bootstrap tables
     process make_bootstrap_tables {
         tag "${mutation_type}/${dataset}"
-        publishDir "$baseDir/output_tables", mode: 'copy', overwrite: true
+        publishDir "${params.temp_path}/output_tables", mode: 'copy', overwrite: true
         
         input:
         tuple val(dataset), val(mutation_type)
@@ -93,25 +93,25 @@ workflow FINAL_BOOTSTRAP_TABLES_workflow {
         script:
         def abs_flag = (params.use_absolute_attributions) ? "-a" : ''
         """
-        mkdir -p $baseDir/output_tables/${dataset}
+        mkdir -p ${params.temp_path}/output_tables/${dataset}
         
         # Copy simulation files if this is a simulated dataset
         if [[ ${dataset} == *"SIM"* ]]; then
             if [[ ${mutation_type} == "SBS" ]]; then
-                cp ${params.input_tables}/${dataset}/WGS_${dataset}.${params.SBS_context}.weights.csv $baseDir/output_tables/${dataset}/
+                cp ${params.temp_path}/${dataset}/WGS_${dataset}.${params.SBS_context}.weights.csv ${params.temp_path}/output_tables/${dataset}/
             elif [[ ${mutation_type} == "DBS" ]]; then
-                cp ${params.input_tables}/${dataset}/WGS_${dataset}.dinucs.weights.csv $baseDir/output_tables/${dataset}/
+                cp ${params.temp_path}/${dataset}/WGS_${dataset}.dinucs.weights.csv ${params.temp_path}/output_tables/${dataset}/
             elif [[ ${mutation_type} == "ID" ]]; then
-                cp ${params.input_tables}/${dataset}/WGS_${dataset}.indels.weights.csv $baseDir/output_tables/${dataset}/
+                cp ${params.temp_path}/${dataset}/WGS_${dataset}.indels.weights.csv ${params.temp_path}/output_tables/${dataset}/
             elif [[ ${mutation_type} == "SV" || ${mutation_type} == "CNV" ]]; then
-                cp ${params.input_tables}/${dataset}/WGS_${dataset}.${mutation_type}.weights.csv $baseDir/output_tables/${dataset}/
+                cp ${params.temp_path}/${dataset}/WGS_${dataset}.${mutation_type}.weights.csv ${params.temp_path}/output_tables/${dataset}/
             fi
         fi
         
-        python $baseDir/bin/make_bootstrap_tables.py -d ${dataset} -t ${mutation_type} -p ${signature_prefix} ${abs_flag} \\
-            -c ${params.SBS_context} -S ${params.signature_tables} -l ${params.confidence_level} \\
+        python $baseDir/bin/make_bootstrap_tables.py -d ${dataset} -t ${mutation_type} -p ${params.signature_prefix} ${abs_flag} \\
+            -c ${params.SBS_context} -S ${params.temp_path}/signature_tables -l ${params.confidence_level} \\
             -T ${params.signature_attribution_thresholds.join(' ')} \\
-            -i $baseDir/output_tables -o "./" -n ${num_bootstrap_samples}
+            -i ${params.temp_path}/output_tables -o "./" -n ${num_bootstrap_samples}
         """
     }
     
