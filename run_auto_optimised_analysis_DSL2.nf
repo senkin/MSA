@@ -162,6 +162,15 @@ include { convert_data_workflow } from './modules/data_conversion' addParams(
     signature_prefix: signature_prefix
 )
 
+
+include { convert_specific_files_workflow } from './modules/data_conversion' addParams(
+    strands_flag: strands_flag,
+    nontranscribed_flag: nontranscribed_flag,
+    error_flag: error_flag,
+    COSMIC_flag: COSMIC_flag,
+    signature_prefix: signature_prefix
+)
+
 include { NNLS_unoptimized_workflow as UnoptimizedNNLS } from './modules/nnls' addParams(
     signature_prefix: signature_prefix
 )
@@ -196,74 +205,57 @@ include { OPTIMISATION_PLOTS_workflow } from './modules/optimisation_plots' addP
 // Main workflow
 workflow {
 
-    if (params.signatures_file && params.input_mutation_table) {
-        // Direct file mode - skip all conversion logic
-        signatures_for_spectra = params.signatures_file
-        signatures_for_unoptimised_NNLS = params.signatures_file
-        converted_SP_to_MSA_for_spectra = params.input_mutation_table
-        converted_SP_to_MSA_for_unoptimised_NNLS = params.input_mutation_table
-        
-        log.info "Using direct file inputs:"
-        log.info "  Signatures: ${params.signatures_file}"
-        log.info "  Input data: ${params.input_mutation_table}"
-    }
-    // Set up input channels based on parameters
     if (params.SP_extractor_output_path) {
-        // Convert SigProfiler extractor output
+        // Convert SigProfiler extractor output to temp location
         convert_data_workflow(params.dataset, params.SP_extractor_output_path, 'signature_tables')
-        signatures_for_spectra = convert_data_workflow.out.signatures_for_spectra
-        signatures_for_unoptimised_NNLS = convert_data_workflow.out.signatures_for_unoptimised_NNLS
+        signature_files_channel = convert_data_workflow.out.signature_files
         
         // Plot signatures if requested
         if (params.plot_signatures) {
-            for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, signatures_for_spectra, 'signatures')
+            for (mutation_type in params.mutation_types) {
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/signature_tables", 'signatures')
             }
         }
         
         if (!params.SP_matrix_generator_output_path) {
-            // Convert extractor matrices
+            // Convert extractor matrices to temp location
             convert_data_workflow(params.dataset, params.SP_extractor_output_path, 'extractor_matrices')
-            converted_SP_to_MSA_for_spectra = convert_data_workflow.out.converted_SP_to_MSA_for_spectra
-            converted_SP_to_MSA_for_unoptimised_NNLS = convert_data_workflow.out.converted_SP_to_MSA_for_unoptimised_NNLS
+            input_files_channel = convert_data_workflow.out.input_files
             
             if (params.plot_input_spectra) {
-                for (mutation_type in mutation_types) {
-                    plot_spectra_workflow(params.dataset, mutation_type, converted_SP_to_MSA_for_spectra, 'mutation_spectra')
+                for (mutation_type in params.mutation_types) {
+                    plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/input_tables", 'mutation_spectra')
                 }
             }
         }
     } else {
-        // Use default signature tables
-        signatures_for_spectra = "${params.signature_tables}"
-        signatures_for_unoptimised_NNLS = "${params.signature_tables}"
+        // Use default signature tables - collect them into a channel
+        signature_files_channel = Channel.fromPath("${params.signature_tables}/*.csv").collect()
         
         if (params.plot_signatures) {
-            for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, signatures_for_spectra, 'signatures')
+            for (mutation_type in params.mutation_types) {
+                plot_spectra_workflow(params.dataset, mutation_type, params.signature_tables, 'signatures')
             }
         }
     }
 
     if (params.SP_matrix_generator_output_path) {
-        // Convert matrix generator output
+        // Convert matrix generator output to temp location
         convert_data_workflow(params.dataset, params.SP_matrix_generator_output_path, 'matrix_generator_matrices')
-        converted_SP_to_MSA_for_spectra = convert_data_workflow.out.converted_SP_to_MSA_for_spectra
-        converted_SP_to_MSA_for_unoptimised_NNLS = convert_data_workflow.out.converted_SP_to_MSA_for_unoptimised_NNLS
+        input_files_channel = convert_data_workflow.out.input_files
         
         if (params.plot_input_spectra) {
-            for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, converted_SP_to_MSA_for_spectra, 'mutation_spectra')
+            for (mutation_type in params.mutation_types) {
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/input_tables", 'mutation_spectra')
             }
         }
     } else if (!params.SP_extractor_output_path) {
-        // Use default input tables
-        converted_SP_to_MSA_for_spectra = "${params.input_tables}"
-        converted_SP_to_MSA_for_unoptimised_NNLS = "${params.input_tables}"
+        // Use default input tables - collect them into a channel
+        input_files_channel = Channel.fromPath("${params.input_tables}/**/*.csv").collect()
         
         if (params.plot_input_spectra) {
-            for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, converted_SP_to_MSA_for_spectra, 'mutation_spectra')
+            for (mutation_type in params.mutation_types) {
+                plot_spectra_workflow(params.dataset, mutation_type, params.input_tables, 'mutation_spectra')
             }
         }
     }
@@ -274,8 +266,8 @@ workflow {
         UnoptimizedNNLS(
             params.dataset,
             mutation_type,
-            converted_SP_to_MSA_for_unoptimised_NNLS,
-            signatures_for_unoptimised_NNLS
+            input_files_channel,
+            signature_files_channel
         )
 
         // Run simulation workflow
@@ -294,7 +286,7 @@ workflow {
                     params.dataset,
                     mutation_type,
                     simulate_data_workflow.out.all_simulation_outputs,
-                    signatures_for_unoptimised_NNLS,
+                    signature_files_channel,
                     weak_threshold,
                     strong_threshold
                 )
@@ -305,7 +297,7 @@ workflow {
                     params.dataset,
                     mutation_type,
                     simulate_data_workflow.out.all_simulation_outputs,
-                    signatures_for_unoptimised_NNLS,
+                    signature_files_channel,
                     weak_threshold,
                     strong_threshold,
                     number_of_bootstrapped_samples_in_optimisation
@@ -348,8 +340,8 @@ workflow {
             OPTIMAL_PENALTIES_workflow.out.penalties_for_central_NNLS_attribution,
             OPTIMAL_PENALTIES_workflow.out.optimal_weak_penalty,
             OPTIMAL_PENALTIES_workflow.out.optimal_strong_penalty,
-            converted_SP_to_MSA_for_unoptimised_NNLS,
-            signatures_for_unoptimised_NNLS
+            input_files_channel,
+            signature_files_channel
         )
         
         // Run final bootstrap NNLS with optimal penalties
@@ -357,8 +349,8 @@ workflow {
             OPTIMAL_PENALTIES_workflow.out.penalties_for_bootstrap_NNLS_attribution,
             OPTIMAL_PENALTIES_workflow.out.optimal_weak_penalty,
             OPTIMAL_PENALTIES_workflow.out.optimal_strong_penalty,
-            converted_SP_to_MSA_for_unoptimised_NNLS,
-            signatures_for_unoptimised_NNLS,
+            input_files_channel,
+            signature_files_channel,
             number_of_bootstrapped_samples
         )
 

@@ -32,6 +32,8 @@ workflow NNLS_unoptimized_workflow {
         
         script:
         """
+        mkdir -p ${params.temp_path}
+        cp -a ${params.signature_tables} ${params.temp_path}
         python $baseDir/bin/run_NNLS.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} \\
             -p ${params.signature_prefix} -i ${params.temp_path}/input_tables -s ${params.temp_path}/signature_tables -o "./" \\
             -n ${params.number_of_samples}

@@ -13,7 +13,7 @@ workflow convert_data_workflow {
     process convert_data {
         tag "${convert_type}/${dataset}"
         
-        // Dynamic publishDir based on convert_type
+        // Use temp_path for all converted outputs
         publishDir (
             convert_type.contains('signature') ? "${params.temp_path}/signature_tables" : "${params.temp_path}/input_tables",
             mode: 'copy',
@@ -26,46 +26,44 @@ workflow convert_data_workflow {
         val convert_type
 
         output:
-        path '*.csv', emit: signatures_for_spectra, optional: true
-        path '*.csv', emit: signatures_for_unoptimised_NNLS, optional: true
-        path '*/*.csv', emit: converted_SP_to_MSA_for_spectra, optional: true
-        path '*/*.csv', emit: converted_SP_to_MSA_for_unoptimised_NNLS, optional: true
+        path '*.csv', emit: signature_files, optional: true
+        path '**/*.csv', emit: input_files, optional: true
 
         script:
         // Base command components
         def base_cmd = "python ${workflow.projectDir}/bin/convert_SP_to_MSA.py"
         def mutation_types_arg = "-t ${params.mutation_types.join(' ')}"
         def signature_tables_arg = "-s ${params.signature_tables}"
-        def output_arg = "-o ./"
+        def temp_output_arg = "-o ./"  // Output to process work directory first, then publishDir handles the move
         
         if (convert_type == 'matrix_generator_matrices') {
             """
             ${base_cmd} -d ${dataset} ${mutation_types_arg} \\
-                -i ${input_path} ${signature_tables_arg} ${output_arg}
+                -i ${input_path} ${signature_tables_arg} ${temp_output_arg}
             """
         } else if (convert_type == 'extractor_matrices') {
             """
             ${base_cmd} -E -d ${dataset} ${mutation_types_arg} \\
-                -i ${input_path} ${signature_tables_arg} ${output_arg}
+                -i ${input_path} ${signature_tables_arg} ${temp_output_arg}
             """
         } else if (convert_type == 'signature_tables') {
             """
             ${base_cmd} -S ${mutation_types_arg} \\
                 -n ${params.signature_prefix} ${params.COSMIC_flag} \\
-                -i ${input_path} ${signature_tables_arg} ${output_arg}
+                -i ${input_path} ${signature_tables_arg} ${temp_output_arg}
             """
         } else if (convert_type == 'specific_mutation_files') {
             // Handle specific mutation files - input_path should be a list of files
             """
             ${base_cmd} -d ${dataset} ${mutation_types_arg} \\
-                -I ${input_path} ${signature_tables_arg} ${output_arg}
+                -I ${input_path} ${signature_tables_arg} ${temp_output_arg}
             """
         } else if (convert_type == 'specific_signature_files') {
             // Handle specific signature files - input_path should be a list of files
             """
             ${base_cmd} -S ${mutation_types_arg} \\
                 -n ${params.signature_prefix} ${params.COSMIC_flag} \\
-                -I ${input_path} ${signature_tables_arg} ${output_arg}
+                -I ${input_path} ${signature_tables_arg} ${temp_output_arg}
             """
         } else {
             """
@@ -81,10 +79,8 @@ workflow convert_data_workflow {
 
     // Emit the converted output
     emit:
-    signatures_for_spectra = convert_data.out.signatures_for_spectra
-    signatures_for_unoptimised_NNLS = convert_data.out.signatures_for_unoptimised_NNLS
-    converted_SP_to_MSA_for_spectra = convert_data.out.converted_SP_to_MSA_for_spectra
-    converted_SP_to_MSA_for_unoptimised_NNLS = convert_data.out.converted_SP_to_MSA_for_unoptimised_NNLS
+    signature_files = convert_data.out.signature_files
+    input_files = convert_data.out.input_files
 }
 
 // Additional workflow for handling specific files

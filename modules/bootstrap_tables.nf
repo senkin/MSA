@@ -72,7 +72,7 @@ workflow FINAL_BOOTSTRAP_TABLES_workflow {
     // Process to make final bootstrap tables
     process make_bootstrap_tables {
         tag "${mutation_type}/${dataset}"
-        publishDir "${params.temp_path}/output_tables", mode: 'copy', overwrite: true
+        publishDir "${params.tables_output_path}", mode: 'copy', overwrite: true
         
         input:
         tuple val(dataset), val(mutation_type)
@@ -93,18 +93,18 @@ workflow FINAL_BOOTSTRAP_TABLES_workflow {
         script:
         def abs_flag = (params.use_absolute_attributions) ? "-a" : ''
         """
-        mkdir -p ${params.temp_path}/output_tables/${dataset}
+        mkdir -p ${params.tables_output_path}${dataset}
         
         # Copy simulation files if this is a simulated dataset
         if [[ ${dataset} == *"SIM"* ]]; then
             if [[ ${mutation_type} == "SBS" ]]; then
-                cp ${params.temp_path}/${dataset}/WGS_${dataset}.${params.SBS_context}.weights.csv ${params.temp_path}/output_tables/${dataset}/
+                cp ${params.temp_path}/${dataset}/WGS_${dataset}.${params.SBS_context}.weights.csv ${params.tables_output_path}/${dataset}/
             elif [[ ${mutation_type} == "DBS" ]]; then
-                cp ${params.temp_path}/${dataset}/WGS_${dataset}.dinucs.weights.csv ${params.temp_path}/output_tables/${dataset}/
+                cp ${params.temp_path}/${dataset}/WGS_${dataset}.dinucs.weights.csv ${params.tables_output_path}/${dataset}/
             elif [[ ${mutation_type} == "ID" ]]; then
-                cp ${params.temp_path}/${dataset}/WGS_${dataset}.indels.weights.csv ${params.temp_path}/output_tables/${dataset}/
+                cp ${params.temp_path}/${dataset}/WGS_${dataset}.indels.weights.csv ${params.tables_output_path}/${dataset}/
             elif [[ ${mutation_type} == "SV" || ${mutation_type} == "CNV" ]]; then
-                cp ${params.temp_path}/${dataset}/WGS_${dataset}.${mutation_type}.weights.csv ${params.temp_path}/output_tables/${dataset}/
+                cp ${params.temp_path}/${dataset}/WGS_${dataset}.${mutation_type}.weights.csv ${params.tables_output_path}/${dataset}/
             fi
         fi
         
