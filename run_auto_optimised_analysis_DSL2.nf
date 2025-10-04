@@ -51,7 +51,7 @@ params.optimisation_NNLS_output_path = params.output_path + "/outputs_optimisati
 params.optimisation_plots_output_path = params.plots_output_path + "/optimisation_plots"
 params.optimised = true // if set to false, optimisation will run but not be used in final attributions
 params.optimisation_strategy = "removal" // optimisation strategy (removal, addition or add-remove)
-params.weak_thresholds = [0, 0.0001]//, '0.0002', '0.0003'] // range of L2 similarity decrease thresholds to be scanned, excluding weakest signatures - adjust if needed
+params.weak_thresholds = [0, 0.0001, 0.0002, 0.0003] // range of L2 similarity decrease thresholds to be scanned, excluding weakest signatures - adjust if needed
 params.strong_thresholds = [0] // range of L2 similarity increase thresholds to be scanned, including strongest signatures: only one is sufficient in default removal strategy
 params.bootstrap_method = "binomial" // bootstrap flag and method (binomial, multinomial, residuals, classic, bootstrap_residuals)
 params.number_of_bootstrapped_samples_in_optimisation = 100 // at least 100 is recommended
@@ -126,10 +126,38 @@ if (params.help) {
     log.info "  USAGE                                                 "
     log.info "--------------------------------------------------------"
     log.info ""
-    log.info "nextflow run run_analysis.nf"
+    log.info "nextflow run run_auto_optimised_analysis.nf [options]"
     log.info ""
-    log.info "Nextflow currently does not support list parameters,"
-    log.info "so please specify the parameters directly in the script."
+    log.info "INPUT OPTIONS (in order of priority):"
+    log.info "  1. Specific files (highest priority):"
+    log.info "     --input_mutation_table <path>  : Specific mutation table file"
+    log.info "     --signatures_file <path>       : Specific signature file"
+    log.info "     NOTE: When using specific files, you MUST specify:"
+    log.info "           --mutation_types <type>  : Single mutation type (e.g., SBS, DBS, ID)"
+    log.info "           --SBS_context <context>  : Single context for SBS (e.g., 96, 192, 288)"
+    log.info ""
+    log.info "  2. SigProfiler outputs:"
+    log.info "     --SP_extractor_output_path <path>         : SigProfiler extractor output"
+    log.info "     --SP_matrix_generator_output_path <path>  : SigProfiler matrix generator output"
+    log.info ""
+    log.info "  3. Default directories (lowest priority):"
+    log.info "     --input_tables <path>      : Directory with mutation tables"
+    log.info "     --signature_tables <path>  : Directory with signature tables"
+    log.info ""
+    log.info "EXAMPLE USAGE:"
+    log.info "  # Using specific files"
+    log.info "  nextflow run run_auto_optimised_analysis.nf \\"
+    log.info "    --input_mutation_table my_sbs.txt \\"
+    log.info "    --signatures_file my_sigs.txt \\"
+    log.info "    --mutation_types SBS \\"
+    log.info "    --SBS_context 96 \\"
+    log.info "    --dataset my_data"
+    log.info ""
+    log.info "  # Using default directories"
+    log.info "  nextflow run run_auto_optimised_analysis.nf --dataset my_data"
+    log.info ""
+    log.info "Note: Specific file inputs override SigProfiler outputs, which override default directories."
+    log.info "      All inputs are converted and stored in the temp directory for processing."
     log.info ""
     exit 0
 } else {
@@ -140,6 +168,39 @@ log.info "help:                               ${params.help}"
 // add parameter values to log output (.nextflow.log)
 log.info params.collect { k,v -> "${k.padRight(34)}: $v" }.join("\n")
 
+// Normalize mutation_types to always be a list (handle command-line string input)
+if (params.mutation_types instanceof String) {
+    mutation_types = [params.mutation_types]
+} else {
+    mutation_types = params.mutation_types
+}
+
+// Validate parameters when using specific file inputs
+if (params.input_mutation_table || params.signatures_file) {
+    if (params.input_mutation_table) {
+        if (mutation_types.size() != 1) {
+            error "ERROR: When using --input_mutation_table, please specify exactly ONE mutation type. Got: ${mutation_types}. Use: --mutation_types SBS (or DBS, ID, etc.)"
+        }
+        if (mutation_types[0] == 'SBS') {
+            // For SBS, also check that only one context is specified
+            log.info "Using specific mutation table for ${mutation_types[0]} with context ${params.SBS_context}"
+        } else {
+            log.info "Using specific mutation table for ${mutation_types[0]}"
+        }
+    }
+    
+    if (params.signatures_file) {
+        if (mutation_types.size() != 1) {
+            error "ERROR: When using --signatures_file, please specify exactly ONE mutation type. Got: ${mutation_types}. Use: --mutation_types SBS (or DBS, ID, etc.)"
+        }
+        if (mutation_types[0] == 'SBS') {
+            log.info "Using specific signature file for ${mutation_types[0]} with context ${params.SBS_context}"
+        } else {
+            log.info "Using specific signature file for ${mutation_types[0]}"
+        }
+    }
+}
+
 
 // Include modules
 include { plot_spectra_workflow } from './modules/plotting' addParams(
@@ -148,22 +209,9 @@ include { plot_spectra_workflow } from './modules/plotting' addParams(
     signature_prefix: signature_prefix
 )
 
-include { BOOTSTRAP_ATTRIBUTIONS_PLOTS_workflow } from './modules/plotting'
-include { METRICS_PLOTS_workflow } from './modules/plotting'
-include { FITTED_SPECTRA_PLOTS_workflow } from './modules/plotting'
-include { RESIDUALS_PLOTS_workflow } from './modules/plotting'
 include { ALL_FINAL_PLOTS_workflow } from './modules/plotting'
 
 include { convert_data_workflow } from './modules/data_conversion' addParams(
-    strands_flag: strands_flag,
-    nontranscribed_flag: nontranscribed_flag,
-    error_flag: error_flag,
-    COSMIC_flag: COSMIC_flag,
-    signature_prefix: signature_prefix
-)
-
-
-include { convert_specific_files_workflow } from './modules/data_conversion' addParams(
     strands_flag: strands_flag,
     nontranscribed_flag: nontranscribed_flag,
     error_flag: error_flag,
@@ -204,28 +252,28 @@ include { OPTIMISATION_PLOTS_workflow } from './modules/optimisation_plots' addP
 
 // Main workflow
 workflow {
-
-    if (params.SP_extractor_output_path) {
+    // Set up input channels based on parameters
+    // Priority: specific files > SigProfiler outputs > default directories
+    
+    // Handle specific file inputs (highest priority)
+    if (params.signatures_file) {
+        // Convert specific signature file
+        convert_data_workflow(params.dataset, params.signatures_file, 'specific_signature_files')
+        signature_files_channel = convert_data_workflow.out.signature_files
+        
+        if (params.plot_signatures) {
+            for (mutation_type in mutation_types) {
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/signature_tables", 'signatures')
+            }
+        }
+    } else if (params.SP_extractor_output_path) {
         // Convert SigProfiler extractor output to temp location
         convert_data_workflow(params.dataset, params.SP_extractor_output_path, 'signature_tables')
         signature_files_channel = convert_data_workflow.out.signature_files
         
-        // Plot signatures if requested
         if (params.plot_signatures) {
-            for (mutation_type in params.mutation_types) {
+            for (mutation_type in mutation_types) {
                 plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/signature_tables", 'signatures')
-            }
-        }
-        
-        if (!params.SP_matrix_generator_output_path) {
-            // Convert extractor matrices to temp location
-            convert_data_workflow(params.dataset, params.SP_extractor_output_path, 'extractor_matrices')
-            input_files_channel = convert_data_workflow.out.input_files
-            
-            if (params.plot_input_spectra) {
-                for (mutation_type in params.mutation_types) {
-                    plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/input_tables", 'mutation_spectra')
-                }
             }
         }
     } else {
@@ -233,28 +281,49 @@ workflow {
         signature_files_channel = Channel.fromPath("${params.signature_tables}/*.csv").collect()
         
         if (params.plot_signatures) {
-            for (mutation_type in params.mutation_types) {
+            for (mutation_type in mutation_types) {
                 plot_spectra_workflow(params.dataset, mutation_type, params.signature_tables, 'signatures')
             }
         }
     }
-
-    if (params.SP_matrix_generator_output_path) {
+    
+    // Handle specific mutation table input (highest priority)
+    if (params.input_mutation_table) {
+        // Convert specific mutation table file
+        convert_data_workflow(params.dataset, params.input_mutation_table, 'specific_mutation_files')
+        input_files_channel = convert_data_workflow.out.input_files
+        
+        if (params.plot_input_spectra) {
+            for (mutation_type in mutation_types) {
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/input_tables", 'mutation_spectra')
+            }
+        }
+    } else if (params.SP_extractor_output_path && !params.SP_matrix_generator_output_path) {
+        // Convert extractor matrices to temp location
+        convert_data_workflow(params.dataset, params.SP_extractor_output_path, 'extractor_matrices')
+        input_files_channel = convert_data_workflow.out.input_files
+        
+        if (params.plot_input_spectra) {
+            for (mutation_type in mutation_types) {
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/input_tables", 'mutation_spectra')
+            }
+        }
+    } else if (params.SP_matrix_generator_output_path) {
         // Convert matrix generator output to temp location
         convert_data_workflow(params.dataset, params.SP_matrix_generator_output_path, 'matrix_generator_matrices')
         input_files_channel = convert_data_workflow.out.input_files
         
         if (params.plot_input_spectra) {
-            for (mutation_type in params.mutation_types) {
+            for (mutation_type in mutation_types) {
                 plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/input_tables", 'mutation_spectra')
             }
         }
-    } else if (!params.SP_extractor_output_path) {
+    } else {
         // Use default input tables - collect them into a channel
         input_files_channel = Channel.fromPath("${params.input_tables}/**/*.csv").collect()
         
         if (params.plot_input_spectra) {
-            for (mutation_type in params.mutation_types) {
+            for (mutation_type in mutation_types) {
                 plot_spectra_workflow(params.dataset, mutation_type, params.input_tables, 'mutation_spectra')
             }
         }
