@@ -34,9 +34,9 @@ workflow plot_spectra_workflow {
         if (plot_type == 'mutation_spectra') {
             """
             python $baseDir/bin/plot_mutation_spectra.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \
-                                                            -i ${params.input_tables} ${strands_flag} ${nontranscribed_flag} -o "./"
+                                                            -i ${inputs} ${strands_flag} ${nontranscribed_flag} -o "./"
             python $baseDir/bin/plot_mutation_spectra.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \
-                                                            -r -i ${params.input_tables} ${strands_flag} ${nontranscribed_flag} -o "./"
+                                                            -r -i ${inputs} ${strands_flag} ${nontranscribed_flag} -o "./"
             """
         } else if (plot_type == 'signatures') {
             """
@@ -81,8 +81,8 @@ workflow BOOTSTRAP_ATTRIBUTIONS_PLOTS_workflow {
         // def abs_flag = params.abs_flag ?: ""
         """
         python $baseDir/bin/plot_bootstrap_attributions.py -d ${dataset} -t ${mutation_type} -p ${signature_prefix} ${abs_flag} \\
-            -c ${params.SBS_context} -S ${params.signature_tables} -I ${params.input_tables} \\
-            -i $baseDir/output_tables -o "./" -n ${params.number_of_bootstrapped_samples}
+            -c ${params.SBS_context} -S ${params.signature_tables} -I ${params.temp_path}/input_tables \\
+            -i ${params.tables_output_path} -o "./" -n ${params.number_of_bootstrapped_samples}
         """
     }
     
@@ -128,7 +128,7 @@ workflow METRICS_PLOTS_workflow {
         script:
         """
         python $baseDir/bin/plot_metrics.py -d ${dataset} -t ${mutation_type} \\
-            -l ${params.metric_threshold} -i $baseDir/output_tables -o "./"
+            -l ${params.metric_threshold} -i ${params.tables_output_path} -o "./"
         """
     }
     
@@ -176,13 +176,13 @@ workflow FITTED_SPECTRA_PLOTS_workflow {
         // def nontranscribed_flag = params.nontranscribed_flag ?: ""
         """
         python $baseDir/bin/plot_mutation_spectra.py -f -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
-            -i $baseDir/output_tables ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
+            -i ${params.tables_output_path} ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
         python $baseDir/bin/plot_mutation_spectra.py -f -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
-            -r -i $baseDir/output_tables ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
+            -r -i ${params.tables_output_path} ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
         python $baseDir/bin/plot_mutation_spectra.py -C -f -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
-            -i $baseDir/output_tables ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
+            -i ${params.tables_output_path} ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
         python $baseDir/bin/plot_mutation_spectra.py -C -f -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
-            -r -i $baseDir/output_tables ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
+            -r -i ${params.tables_output_path} ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
         """
     }
     
@@ -223,9 +223,9 @@ workflow RESIDUALS_PLOTS_workflow {
         // def nontranscribed_flag = params.nontranscribed_flag ?: ""
         """
         python $baseDir/bin/plot_mutation_spectra.py -H -R -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
-            -i $baseDir/output_tables ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
+            -i ${params.tables_output_path} ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
         python $baseDir/bin/plot_mutation_spectra.py -C -R -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
-            -i $baseDir/output_tables ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
+            -i ${params.tables_output_path} ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
         """
     }
     

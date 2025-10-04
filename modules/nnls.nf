@@ -251,7 +251,7 @@ workflow FINAL_NNLS_workflow {
     // Simple final NNLS process using penalty files directly
     process run_final_NNLS {
         tag "${mutation_type}/${dataset}"
-        publishDir "${params.temp_path}/output_tables", mode: 'copy', overwrite: true
+        publishDir "${params.tables_output_path}", mode: 'copy', overwrite: true
         
         input:
         tuple val(dataset), val(mutation_type)
@@ -316,7 +316,7 @@ workflow FINAL_NNLS_BOOTSTRAP_workflow {
     // Simple bootstrap process using penalty files directly
     process run_final_bootstrap_NNLS {
         tag "${mutation_type}/${dataset}/${bootstrap_index}"
-        publishDir "${params.temp_path}/output_tables", mode: 'copy', overwrite: true
+        publishDir "${params.tables_output_path}", mode: 'copy', overwrite: true
         
         input:
         tuple val(dataset), val(mutation_type)

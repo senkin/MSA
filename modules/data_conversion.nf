@@ -1,7 +1,5 @@
 // modules/data_conversion.nf
 
-// def signature_prefix = (params.SP_extractor_output_path) ? params.signature_prefix + "_conv" : params.signature_prefix
-
 workflow convert_data_workflow {
     take:
     dataset
@@ -81,27 +79,4 @@ workflow convert_data_workflow {
     emit:
     signature_files = convert_data.out.signature_files
     input_files = convert_data.out.input_files
-}
-
-// Additional workflow for handling specific files
-workflow convert_specific_files_workflow {
-    take:
-    dataset
-    input_files_list  // List of specific files to convert
-    file_type        // 'mutation' or 'signature'
-
-    main:
-    if (file_type == 'mutation') {
-        convert_data_workflow(dataset, input_files_list, 'specific_mutation_files')
-    } else if (file_type == 'signature') {
-        convert_data_workflow(dataset, input_files_list, 'specific_signature_files')
-    } else {
-        error "Invalid file_type: ${file_type}. Must be 'mutation' or 'signature'"
-    }
-
-    emit:
-    signatures_for_spectra = convert_data_workflow.out.signatures_for_spectra
-    signatures_for_unoptimised_NNLS = convert_data_workflow.out.signatures_for_unoptimised_NNLS
-    converted_SP_to_MSA_for_spectra = convert_data_workflow.out.converted_SP_to_MSA_for_spectra
-    converted_SP_to_MSA_for_unoptimised_NNLS = convert_data_workflow.out.converted_SP_to_MSA_for_unoptimised_NNLS
 }

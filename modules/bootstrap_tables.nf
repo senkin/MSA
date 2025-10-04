@@ -93,7 +93,7 @@ workflow FINAL_BOOTSTRAP_TABLES_workflow {
         script:
         def abs_flag = (params.use_absolute_attributions) ? "-a" : ''
         """
-        mkdir -p ${params.tables_output_path}${dataset}
+        mkdir -p ${params.tables_output_path}/${dataset}
         
         # Copy simulation files if this is a simulated dataset
         if [[ ${dataset} == *"SIM"* ]]; then
@@ -111,7 +111,7 @@ workflow FINAL_BOOTSTRAP_TABLES_workflow {
         python $baseDir/bin/make_bootstrap_tables.py -d ${dataset} -t ${mutation_type} -p ${params.signature_prefix} ${abs_flag} \\
             -c ${params.SBS_context} -S ${params.temp_path}/signature_tables -l ${params.confidence_level} \\
             -T ${params.signature_attribution_thresholds.join(' ')} \\
-            -i ${params.temp_path}/output_tables -o "./" -n ${num_bootstrap_samples}
+            -i ${params.tables_output_path} -o "./" -n ${num_bootstrap_samples}
         """
     }
     
