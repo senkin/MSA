@@ -5,6 +5,7 @@ workflow convert_data_workflow {
     dataset
     input_path
     convert_type // 'matrix_generator_matrices', 'extractor_matrices', 'signature_tables', 'specific_mutation_files', 'specific_signature_files'
+    mutation_types_list
 
     main:
     // Define and invoke the combined process
@@ -22,6 +23,7 @@ workflow convert_data_workflow {
         val dataset
         val input_path  // Can be a directory path or list of specific files
         val convert_type
+        val mutation_types_list
 
         output:
         path '*.csv', emit: signature_files, optional: true
@@ -30,7 +32,7 @@ workflow convert_data_workflow {
         script:
         // Base command components
         def base_cmd = "python ${workflow.projectDir}/bin/convert_SP_to_MSA.py"
-        def mutation_types_arg = "-t ${params.mutation_types.join(' ')}"
+        def mutation_types_arg = "-t ${mutation_types_list.join(' ')}"
         def signature_tables_arg = "-s ${params.signature_tables}"
         def temp_output_arg = "-o ./"  // Output to process work directory first, then publishDir handles the move
         
@@ -73,7 +75,7 @@ workflow convert_data_workflow {
     }
 
     // Invoke the process
-    convert_data(dataset, input_path, convert_type)
+    convert_data(dataset, input_path, convert_type, mutation_types_list)
 
     // Emit the converted output
     emit:

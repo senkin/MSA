@@ -258,7 +258,7 @@ workflow {
     // Handle specific file inputs (highest priority)
     if (params.signatures_file) {
         // Convert specific signature file
-        convert_data_workflow(params.dataset, params.signatures_file, 'specific_signature_files')
+        convert_data_workflow(params.dataset, file(params.signatures_file).toAbsolutePath(), 'specific_signature_files', mutation_types)
         signature_files_channel = convert_data_workflow.out.signature_files
         
         if (params.plot_signatures) {
@@ -268,7 +268,7 @@ workflow {
         }
     } else if (params.SP_extractor_output_path) {
         // Convert SigProfiler extractor output to temp location
-        convert_data_workflow(params.dataset, params.SP_extractor_output_path, 'signature_tables')
+        convert_data_workflow(params.dataset, params.SP_extractor_output_path, 'signature_tables', mutation_types)
         signature_files_channel = convert_data_workflow.out.signature_files
         
         if (params.plot_signatures) {
@@ -290,7 +290,7 @@ workflow {
     // Handle specific mutation table input (highest priority)
     if (params.input_mutation_table) {
         // Convert specific mutation table file
-        convert_data_workflow(params.dataset, params.input_mutation_table, 'specific_mutation_files')
+        convert_data_workflow(params.dataset, file(params.input_mutation_table).toAbsolutePath(), 'specific_mutation_files', mutation_types)
         input_files_channel = convert_data_workflow.out.input_files
         
         if (params.plot_input_spectra) {
@@ -300,7 +300,7 @@ workflow {
         }
     } else if (params.SP_extractor_output_path && !params.SP_matrix_generator_output_path) {
         // Convert extractor matrices to temp location
-        convert_data_workflow(params.dataset, params.SP_extractor_output_path, 'extractor_matrices')
+        convert_data_workflow(params.dataset, params.SP_extractor_output_path, 'extractor_matrices', mutation_types)
         input_files_channel = convert_data_workflow.out.input_files
         
         if (params.plot_input_spectra) {
@@ -310,7 +310,7 @@ workflow {
         }
     } else if (params.SP_matrix_generator_output_path) {
         // Convert matrix generator output to temp location
-        convert_data_workflow(params.dataset, params.SP_matrix_generator_output_path, 'matrix_generator_matrices')
+        convert_data_workflow(params.dataset, params.SP_matrix_generator_output_path, 'matrix_generator_matrices', mutation_types)
         input_files_channel = convert_data_workflow.out.input_files
         
         if (params.plot_input_spectra) {
