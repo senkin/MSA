@@ -1,6 +1,6 @@
 #!/usr/bin/env nextflow
-nextflow.enable.dsl = 1
-// Copyright (C) 2022 Sergey Senkin
+nextflow.enable.dsl = 2
+// Copyright (C) 2025 Sergey Senkin
 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -16,10 +16,12 @@ nextflow.enable.dsl = 1
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 // input data
-params.SP_extractor_output_path = null // optional path to SigProfilerExtractor output
-params.SP_matrix_generator_output_path = null // optional path to SigProfilerMatrixGenerator output
+params.signatures_file = null // optional direct path to signatures file, if null, default signature tables will be used from params.signature_tables
+params.input_mutation_table = null // optional direct path to input mutation table file, if null, default input tables will be used from params.input_tables
+params.SP_extractor_output_path = null // optional path to SigProfilerExtractor output, if null, default input will be used
+params.SP_matrix_generator_output_path = null // optional path to SigProfilerMatrixGenerator output, if null, default input will be used
 params.COSMIC_signatures = false // if set to true, COSMIC signatures are used form SigProfiler output, otherwise de-novo ones are used
-params.dataset = ['SIM_test'] // several datasets can be provided as long as input mutation tables are available
+params.dataset = 'SIM_test' // dataset name. Input matrices to be provided in params.input_tables/params.dataset, unless SigProfiler inputs are used
 params.mutation_types = ['SBS'] // add or remove mutation types if needed
 params.input_tables = "$baseDir/input_mutation_tables"
 params.SBS_context = 96 // 96, 192, 288, 1536 context matrices can be provided (SBS only)
@@ -29,6 +31,7 @@ params.number_of_samples = -1 // number of samples to analyse (-1 means all avai
 params.output_path = "."
 params.tables_output_path = params.output_path + "/output_tables"
 params.plots_output_path = params.output_path + "/plots"
+params.temp_path = params.output_path + "/temp"
 
 // signatures to use
 params.signature_tables = "$baseDir/signature_tables"
@@ -44,12 +47,12 @@ params.zero_inflation_threshold = 0.05 // set the relative threshold below which
 
 // optimisation flag and parameters
 params.run_only_optimisation = false // set to true if only optimisation is required, without final attributions
-params.optimisation_NNLS_output_path = "$baseDir/outputs_optimisation"
+params.optimisation_NNLS_output_path = params.output_path + "/outputs_optimisation"
 params.optimisation_plots_output_path = params.plots_output_path + "/optimisation_plots"
 params.optimised = true // if set to false, optimisation will run but not be used in final attributions
 params.optimisation_strategy = "removal" // optimisation strategy (removal, addition or add-remove)
-params.weak_thresholds = ['0.0000', '0.0001', '0.0002', '0.0003'] // range of L2 similarity decrease thresholds to be scanned, excluding weakest signatures - adjust if needed
-params.strong_thresholds = ['0.0000'] // range of L2 similarity increase thresholds to be scanned, including strongest signatures: only one is sufficient in default removal strategy
+params.weak_thresholds = [0, 0.0001, 0.0002, 0.0003] // range of L2 similarity decrease thresholds to be scanned, excluding weakest signatures - adjust if needed
+params.strong_thresholds = [0] // range of L2 similarity increase thresholds to be scanned, including strongest signatures: only one is sufficient in default removal strategy
 params.bootstrap_method = "binomial" // bootstrap flag and method (binomial, multinomial, residuals, classic, bootstrap_residuals)
 params.number_of_bootstrapped_samples_in_optimisation = 100 // at least 100 is recommended
 params.number_of_bootstrapped_samples = 1000 // bootstrap variations in final attribution, at least 1000 is recommended
@@ -88,14 +91,15 @@ signature_prefix = (params.SP_extractor_output_path) ? params.signature_prefix +
 noise_flag = (params.add_noise) ? "-z" : ''
 no_CI_for_penalties_flag = (params.no_CI_for_penalties) ? "--no_CI" : ''
 calculate_penalty_on_average_flag = (params.calculate_penalty_on_average) ? "--average" : ''
-prioritised_signatures_flag = (params.signatures_to_prioritise) ? "--signatures_to_prioritise " + params.signatures_to_prioritise.join(' ') : ''
 // override number of samples/variations for test run
-test_run = ((params.dataset == ['SIM_test']) || (params.dataset == 'SIM_test')) ? true : false
+test_run = (params.dataset == 'SIM_test') ? true : false
 number_of_bootstrapped_samples_in_optimisation = (test_run) ? 10 : params.number_of_bootstrapped_samples_in_optimisation
 number_of_bootstrapped_samples = (test_run) ? 10 : params.number_of_bootstrapped_samples
 number_of_simulated_samples = (test_run) ? 10 : params.number_of_simulated_samples
-weak_thresholds = (test_run) ? ['0.0000', '0.0100', '0.0200'] : params.weak_thresholds
-strong_thresholds = (test_run) ? ['0.0000'] : params.strong_thresholds
+weak_thresholds = (test_run) ? [0, 0.01, 0.02] : params.weak_thresholds
+strong_thresholds = (test_run) ? [0] : params.strong_thresholds
+// mutation_types = (test_run) ? ['SBS', 'DBS', 'ID'] : params.mutation_types
+// mutation_types = (test_run) ? ['DBS'] : params.mutation_types
 
 params.help = null
 
@@ -108,7 +112,7 @@ log.info '             | |\\/| |\\___ \\ / /\\ \\                 '
 log.info '             | |  | |____) / ____ \\                    '
 log.info '             |_|  |_|_____/_/    \\_\\                  '
 log.info '                                                        '
-log.info '          MUTATIONAL SIGNATURE ANALYSIS v2.2            '
+log.info '          MUTATIONAL SIGNATURE ANALYSIS v3.0            '
 log.info '--------------------------------------------------------'
 log.info 'Copyright (C) Sergey Senkin'
 log.info 'This program comes with ABSOLUTELY NO WARRANTY; for details see LICENSE'
@@ -122,10 +126,38 @@ if (params.help) {
     log.info "  USAGE                                                 "
     log.info "--------------------------------------------------------"
     log.info ""
-    log.info "nextflow run run_analysis.nf"
+    log.info "nextflow run run_auto_optimised_analysis.nf [options]"
     log.info ""
-    log.info "Nextflow currently does not support list parameters,"
-    log.info "so please specify the parameters directly in the script."
+    log.info "INPUT OPTIONS (in order of priority):"
+    log.info "  1. Specific files (highest priority):"
+    log.info "     --input_mutation_table <path>  : Specific mutation table file"
+    log.info "     --signatures_file <path>       : Specific signature file"
+    log.info "     NOTE: When using specific files, you MUST specify:"
+    log.info "           --mutation_types <type>  : Single mutation type (e.g., SBS, DBS, ID)"
+    log.info "           --SBS_context <context>  : Single context for SBS (e.g., 96, 192, 288)"
+    log.info ""
+    log.info "  2. SigProfiler outputs:"
+    log.info "     --SP_extractor_output_path <path>         : SigProfiler extractor output"
+    log.info "     --SP_matrix_generator_output_path <path>  : SigProfiler matrix generator output"
+    log.info ""
+    log.info "  3. Default directories (lowest priority):"
+    log.info "     --input_tables <path>      : Directory with mutation tables"
+    log.info "     --signature_tables <path>  : Directory with signature tables"
+    log.info ""
+    log.info "EXAMPLE USAGE:"
+    log.info "  # Using specific files"
+    log.info "  nextflow run run_auto_optimised_analysis.nf \\"
+    log.info "    --input_mutation_table my_sbs.txt \\"
+    log.info "    --signatures_file my_sigs.txt \\"
+    log.info "    --mutation_types SBS \\"
+    log.info "    --SBS_context 96 \\"
+    log.info "    --dataset my_data"
+    log.info ""
+    log.info "  # Using default directories"
+    log.info "  nextflow run run_auto_optimised_analysis.nf --dataset my_data"
+    log.info ""
+    log.info "Note: Specific file inputs override SigProfiler outputs, which override default directories."
+    log.info "      All inputs are converted and stored in the temp directory for processing."
     log.info ""
     exit 0
 } else {
@@ -136,561 +168,282 @@ log.info "help:                               ${params.help}"
 // add parameter values to log output (.nextflow.log)
 log.info params.collect { k,v -> "${k.padRight(34)}: $v" }.join("\n")
 
-if (params.SP_extractor_output_path) {
-  process convert_signature_tables {
-    publishDir "${params.signature_tables}", mode: 'move', overwrite: true
-
-    input:
-    path input_path from params.SP_extractor_output_path
-
-    output:
-    file '*.csv' into signatures_for_spectra
-    file '*.csv' into signatures_for_unoptimised_NNLS
-
-    script:
-    """
-    python $baseDir/bin/convert_SP_to_MSA.py -S -t ${params.mutation_types.join(' ')} \
-                                             -n ${signature_prefix} ${COSMIC_flag} \
-                                             -i ${input_path} -s ${params.signature_tables} -o "./"
-    """
-  }
-  if (!params.SP_matrix_generator_output_path) {
-    process convert_extractor_input_matrices {
-      publishDir "${params.input_tables}", mode: 'move', overwrite: true
-
-      input:
-      each dataset from params.dataset
-      path input_path from params.SP_extractor_output_path
-
-      output:
-      file '*/*.csv' into converted_SP_to_MSA_for_spectra
-      file '*/*.csv' into converted_SP_to_MSA_for_unoptimised_NNLS
-
-      script:
-      """
-      python $baseDir/bin/convert_SP_to_MSA.py -E -d ${dataset} -t ${params.mutation_types.join(' ')} \
-                                              -i ${input_path} -s ${params.signature_tables} -o "./"
-      """
-    }
-  }
+// Normalize mutation_types to always be a list (handle command-line string input)
+if (test_run) {
+    mutation_types = ['SBS', 'DBS', 'ID']
+} else if (params.mutation_types instanceof String) {
+    mutation_types = [params.mutation_types]
 } else {
-  // placeholder channels for execution from existing input matrices
-  signatures_for_spectra = Channel.value(1)
-  signatures_for_unoptimised_NNLS = Channel.value(1)
+    mutation_types = params.mutation_types
 }
 
-if (params.SP_matrix_generator_output_path) {
-  process convert_input_data {
-    publishDir "${params.input_tables}", mode: 'move', overwrite: true
-
-    input:
-    each dataset from params.dataset
-    path input_path from params.SP_matrix_generator_output_path
-
-    output:
-    file '*/*.csv' into converted_SP_to_MSA_for_spectra
-    file '*/*.csv' into converted_SP_to_MSA_for_unoptimised_NNLS
-
-    script:
-    """
-    python $baseDir/bin/convert_SP_to_MSA.py -d ${dataset} -t ${params.mutation_types.join(' ')} \
-                                             -i ${input_path} -s ${params.signature_tables} -o "./"
-    """
-  }
-} else if (!params.SP_extractor_output_path) {
-  // placeholder channels for execution from existing input matrices
-  converted_SP_to_MSA_for_spectra = Channel.value(1)
-  converted_SP_to_MSA_for_unoptimised_NNLS = Channel.value(1)
-}
-
-process plot_input_spectra {
-  tag "${mutation_type}/${dataset}"
-  publishDir "${params.plots_output_path}", mode: 'move'
-
-  input:
-  each mutation_type from params.mutation_types
-  each dataset from params.dataset
-  file inputs from converted_SP_to_MSA_for_spectra
-
-  output:
-  file '*/*/*.pdf' optional true
-  file '*/*/*/*.pdf' optional true
-  file '*/*/*/*/*.pdf' optional true
-  file '*/*/*/*/*/*.pdf' optional true
-
-  when:
-  params.plot_input_spectra
-
-  script:
-  """
-  python $baseDir/bin/plot_mutation_spectra.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \
-                                                -i ${params.input_tables} ${strands_flag} ${nontranscribed_flag} -o "./"
-  python $baseDir/bin/plot_mutation_spectra.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \
-                                                -r -i ${params.input_tables} ${strands_flag} ${nontranscribed_flag} -o "./"
-  """
-}
-
-process plot_signatures {
-  tag "${mutation_type}/${dataset}"
-  publishDir "${params.plots_output_path}", mode: 'move'
-
-  input:
-  each mutation_type from params.mutation_types
-  each dataset from params.dataset
-  file signatures from signatures_for_spectra
-
-  output:
-  file '*/*/*.pdf' optional true
-  file '*/*/*/*.pdf' optional true
-  file '*/*/*/*/*.pdf' optional true
-  file '*/*/*/*/*/*.pdf' optional true
-
-  when:
-  params.plot_signatures
-
-  script:
-  """
-  python $baseDir/bin/plot_mutation_spectra.py -S -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} \
-                                               -p ${signature_prefix} -s ${params.signature_tables} \
-                                               -r ${strands_flag} ${nontranscribed_flag} -o "./"
-  """
-}
-
-process run_unoptimised_model {
-  tag "${mutation_type}/${dataset}"
-  publishDir "$baseDir/output_tables_unoptimised", mode: 'copy', overwrite: true
-
-  input:
-  each mutation_type from params.mutation_types
-  each dataset from params.dataset
-  file inputs from converted_SP_to_MSA_for_unoptimised_NNLS
-  file signatures from signatures_for_unoptimised_NNLS
-
-  output:
-  file("./${dataset}/output_${dataset}_${mutation_type}_mutations_table.csv") into unoptimised_outputs
-  file("./${dataset}/output_${dataset}_${mutation_type}_weights_table.csv")
-  file("./${dataset}/output_${dataset}_${mutation_type}_stat_info.csv")
-  set dataset, mutation_type into unoptimised_attributions
-
-  script:
-  """
-  python $baseDir/bin/run_NNLS.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} -n ${params.number_of_samples} \
-                                  -p ${signature_prefix} -i ${params.input_tables} -s ${params.signature_tables} -o "./"
-  """
-}
-
-process run_simulations {
-  tag "${mutation_type}/${dataset}"
-  publishDir "$baseDir/output_tables", mode: 'copy', overwrite: true
-
-  input:
-  set dataset, mutation_type from unoptimised_attributions
-
-  output:
-  file("./SIM_${dataset}/WGS_SIM_${dataset}.${params.SBS_context}.csv") optional true
-  file("./SIM_${dataset}/WGS_SIM_${dataset}.${mutation_type}.csv") optional true
-  file("./SIM_${dataset}/WGS_SIM_${dataset}.dinucs.csv") optional true
-  file("./SIM_${dataset}/WGS_SIM_${dataset}.indels.csv") optional true
-  file("./SIM_${dataset}/WGS_SIM_${dataset}.${params.SBS_context}.weights.csv") optional true
-  file("./SIM_${dataset}/WGS_SIM_${dataset}.${mutation_type}.weights.csv") optional true
-  file("./SIM_${dataset}/WGS_SIM_${dataset}.dinucs.weights.csv") optional true
-  file("./SIM_${dataset}/WGS_SIM_${dataset}.indels.weights.csv") optional true
-  set dataset, mutation_type into simulation_outputs
-  set dataset, mutation_type into simulation_outputs_for_bootstrap
-
-  script:
-  """
-  python $baseDir/bin/simulate_data.py -d SIM_${dataset} -t ${mutation_type} -c ${params.SBS_context} -n ${number_of_simulated_samples} -p ${signature_prefix} \
-                                  -B ${noise_flag} --noise_type ${params.noise_type} -Z ${params.noise_stdev} --zero_inflation_threshold ${params.zero_inflation_threshold} \
-                                  -i $baseDir/output_tables_unoptimised/${dataset}/output_${dataset}_${mutation_type}_mutations_table.csv -s ${params.signature_tables} -o "./"
-  """
-}
-
-process run_optimisation_NNLS {
-  tag "${mutation_type}/${dataset}"
-  publishDir "${params.optimisation_NNLS_output_path}"
-
-  input:
-  each weak_threshold from weak_thresholds
-  each strong_threshold from strong_thresholds
-  set dataset, mutation_type from simulation_outputs
-
-  output:
-  set dataset, mutation_type into optimisation_attribution_for_tables
-  file("SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/*.csv")
-
-  when:
-  !params.run_only_simulations
-
-  script:
-  """
-  mkdir -p ${params.optimisation_NNLS_output_path}/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}
-  [[ ${mutation_type} == "SBS" ]] && \
-    cp $baseDir/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.${params.SBS_context}.weights.csv ${params.optimisation_NNLS_output_path}/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
-  [[ ${mutation_type} == "DBS" ]] && \
-    cp $baseDir/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.dinucs.weights.csv ${params.optimisation_NNLS_output_path}/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
-  [[ ${mutation_type} == "ID" ]] && \
-    cp $baseDir/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.indels.weights.csv ${params.optimisation_NNLS_output_path}/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
-  [[ ${mutation_type} == "SV" || ${mutation_type} == "CNV" ]] && \
-    cp $baseDir/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.${mutation_type}.weights.csv ${params.optimisation_NNLS_output_path}/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
-  python $baseDir/bin/run_NNLS.py -d SIM_${dataset} -t ${mutation_type} -p ${signature_prefix} \
-                                  --optimisation_strategy ${params.optimisation_strategy} \
-                                  -W ${weak_threshold} -S ${strong_threshold} \
-                                  -i $baseDir/output_tables -s ${params.signature_tables} \
-                                  -o "./" -x -c ${params.SBS_context} --add_suffix
-  """
-}
-
-process run_optimisation_NNLS_bootstrapping {
-  tag "${mutation_type}/${dataset}"
-  publishDir "${params.optimisation_NNLS_output_path}"
-
-  input:
-  each i from 1..number_of_bootstrapped_samples_in_optimisation
-  each weak_threshold from weak_thresholds
-  each strong_threshold from strong_thresholds
-  set dataset, mutation_type from simulation_outputs_for_bootstrap
-
-  output:
-  file("./SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output/output_SIM_${dataset}_${mutation_type}_${weak_threshold}_${strong_threshold}_${i}_mutations_table.csv")
-  file("./SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output/output_SIM_${dataset}_${mutation_type}_${weak_threshold}_${strong_threshold}_${i}_stat_info.csv")
-  file("./SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output/output_SIM_${dataset}_${mutation_type}_${weak_threshold}_${strong_threshold}_${i}_weights_table.csv")
-  val i into optimisation_bootstrap_outputs
-
-  when:
-  !params.run_only_simulations
-
-  script:
-  """
-  python $baseDir/bin/run_NNLS.py -B -d SIM_${dataset} -t ${mutation_type} -c ${params.SBS_context} -x \
-                                  --optimisation_strategy ${params.optimisation_strategy} \
-                                  --bootstrap_method ${params.bootstrap_method} \
-                                  -W ${weak_threshold} -S ${strong_threshold} --add_suffix \
-                                  -p ${signature_prefix} -i $baseDir/output_tables -s ${params.signature_tables} -o "./"
-  mkdir -p SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output
-  mv SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/output_SIM_${dataset}_${mutation_type}_mutations_table.csv SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output/output_SIM_${dataset}_${mutation_type}_${weak_threshold}_${strong_threshold}_${i}_mutations_table.csv
-  mv SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/output_SIM_${dataset}_${mutation_type}_weights_table.csv SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output/output_SIM_${dataset}_${mutation_type}_${weak_threshold}_${strong_threshold}_${i}_weights_table.csv
-  mv SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/output_SIM_${dataset}_${mutation_type}_stat_info.csv SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output/output_SIM_${dataset}_${mutation_type}_${weak_threshold}_${strong_threshold}_${i}_stat_info.csv
-  """
-}
-
-process make_optimisation_bootstrap_tables {
-  tag "${mutation_type}/${dataset}"
-  publishDir "${params.optimisation_NNLS_output_path}"
-
-  input:
-  set dataset, mutation_type from optimisation_attribution_for_tables
-  val i from optimisation_bootstrap_outputs.collect()
-  each weak_threshold from weak_thresholds
-  each strong_threshold from strong_thresholds
-
-  output:
-  file("*/*.csv") into all_optimisation_bootstrap_outputs_for_penalties
-  file '*/truth_studies/*.csv'
-  file '*/truth_studies/*.json'
-
-  script:
-  """
-  python $baseDir/bin/make_bootstrap_tables.py -d SIM_${dataset} -t ${mutation_type} -p ${signature_prefix} \
-          --suffix ${weak_threshold}_${strong_threshold} -l ${params.confidence_level} \
-          -c ${params.SBS_context} -S ${params.signature_tables} \
-          -T ${params.signature_attribution_thresholds.join(' ')} \
-          -i ${params.optimisation_NNLS_output_path} -o "./" -n ${number_of_bootstrapped_samples_in_optimisation}
-  """
-}
-
-process calculate_optimal_penalties {
-  tag "${mutation_type}/${dataset}"
-  publishDir "${params.optimisation_NNLS_output_path}"
-
-  input:
-  file ('*.csv') from all_optimisation_bootstrap_outputs_for_penalties.collect()
-  each mutation_type from params.mutation_types
-  each dataset from params.dataset
-
-  output:
-  set dataset, mutation_type into penalties_for_optimisation_plotting
-  set dataset, mutation_type into penalties_for_central_NNLS_attribution
-  set dataset, mutation_type into penalties_for_bootstrap_NNLS_attribution
-  file '*/*/*.csv'
-  file '*/*/*.json'
-  file("SIM_${dataset}/${mutation_type}/optimal_weak_penalty") into optimal_weak_penalty
-  file("SIM_${dataset}/${mutation_type}/optimal_weak_penalty") into optimal_weak_penalty_for_bootstrapping
-  file("SIM_${dataset}/${mutation_type}/optimal_strong_penalty") into optimal_strong_penalty
-  file("SIM_${dataset}/${mutation_type}/optimal_strong_penalty") into optimal_strong_penalty_for_bootstrapping
-
-  script:
-  """
-  python $baseDir/bin/calculate_optimal_penalties.py -d SIM_${dataset} -t ${mutation_type} \
-                                                     -I $baseDir/output_tables/SIM_${dataset} \
-                                                     -i ${params.optimisation_NNLS_output_path} -o "./" \
-                                                     -c ${params.SBS_context} \
-                                                     ${no_CI_for_penalties_flag} \
-                                                     ${calculate_penalty_on_average_flag} \
-                                                     ${prioritised_signatures_flag} \
-                                                     -M ${params.metric_to_prioritise} \
-                                                     -T ${params.metric_threshold} \
-                                                     -W ${weak_thresholds.join(' ')} \
-                                                     -S ${strong_thresholds.join(' ')} \
-                                                     --signature_path ${params.signature_tables} \
-                                                     -p ${signature_prefix}
-  """
-}
-
-process plot_optimisation_plots {
-  tag "${mutation_type}/${dataset}"
-  publishDir "${params.optimisation_plots_output_path}"
-
-  input:
-  set dataset, mutation_type from penalties_for_optimisation_plotting
-
-  when:
-  params.plot_optimisation_plots
-
-  output:
-  file '*/*.pdf' optional true
-  file '*/*/*.pdf' optional true
-  file '*/*/*/*.pdf' optional true
-
-  script:
-  """
-  python $baseDir/bin/plot_metric_heatmaps.py -d SIM_${dataset} -t ${mutation_type} \
-                                              -i ${params.optimisation_NNLS_output_path} -o "./" \
-                                              -c ${params.SBS_context} \
-                                              -l ${params.metric_threshold} \
-                                              -W ${weak_thresholds.join(' ')} \
-                                              -S ${strong_thresholds.join(' ')} \
-                                              -T ${params.signature_attribution_thresholds.join(' ')} \
-                                              --signature_path ${params.signature_tables} \
-                                              -p ${signature_prefix}
-  """
+// Validate parameters when using specific file inputs
+if (params.input_mutation_table || params.signatures_file) {
+    if (params.input_mutation_table) {
+        if (mutation_types.size() != 1) {
+            error "ERROR: When using --input_mutation_table, please specify exactly ONE mutation type. Got: ${mutation_types}. Use: --mutation_types SBS (or DBS, ID, etc.)"
+        }
+        if (mutation_types[0] == 'SBS') {
+            // For SBS, also check that only one context is specified
+            log.info "Using specific mutation table for ${mutation_types[0]} with context ${params.SBS_context}"
+        } else {
+            log.info "Using specific mutation table for ${mutation_types[0]}"
+        }
+    }
+    
+    if (params.signatures_file) {
+        if (mutation_types.size() != 1) {
+            error "ERROR: When using --signatures_file, please specify exactly ONE mutation type. Got: ${mutation_types}. Use: --mutation_types SBS (or DBS, ID, etc.)"
+        }
+        if (mutation_types[0] == 'SBS') {
+            log.info "Using specific signature file for ${mutation_types[0]} with context ${params.SBS_context}"
+        } else {
+            log.info "Using specific signature file for ${mutation_types[0]}"
+        }
+    }
 }
 
 
-process run_NNLS_normal {
-  tag "${mutation_type}/${dataset}"
-  publishDir "$baseDir/output_tables", mode: 'copy', overwrite: true
+// Include modules
+include { stage_default_signatures_workflow } from './modules/stage_default_inputs'
+include { stage_default_inputs_workflow } from './modules/stage_default_inputs'
 
-  input:
-  set dataset, mutation_type from penalties_for_central_NNLS_attribution
-  file weak_penalty from optimal_weak_penalty
-  file strong_penalty from optimal_strong_penalty
+include { plot_spectra_workflow } from './modules/plotting' addParams(
+    strands_flag: strands_flag,
+    nontranscribed_flag: nontranscribed_flag,
+    signature_prefix: signature_prefix
+)
 
-  output:
-  file("./${dataset}/output_${dataset}_${mutation_type}_mutations_table.csv") into final_outputs_no_bootstrap
-  file("./${dataset}/output_${dataset}_${mutation_type}_weights_table.csv")
-  file("./${dataset}/output_${dataset}_${mutation_type}_stat_info.csv")
-  file("./${dataset}/output_${dataset}_${mutation_type}_fitted_values.csv")
-  file("./${dataset}/output_${dataset}_${mutation_type}_residuals.csv") into central_NNLS_residuals
-  set dataset, mutation_type into attribution_for_bootstrap_plots
-  set dataset, mutation_type into attribution_for_spectra_plots
-  set dataset, mutation_type into attribution_for_residuals
-  set dataset, mutation_type into attribution_for_metrics
-  set dataset, mutation_type into attribution_for_tables
+include { ALL_FINAL_PLOTS_workflow } from './modules/plotting'
 
-  when:
-  !params.run_only_optimisation
+include { convert_data_workflow } from './modules/data_conversion' addParams(
+    strands_flag: strands_flag,
+    nontranscribed_flag: nontranscribed_flag,
+    error_flag: error_flag,
+    COSMIC_flag: COSMIC_flag,
+    signature_prefix: signature_prefix
+)
 
-  script:
-  """
-  python $baseDir/bin/run_NNLS.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \
-                                  --optimisation_strategy ${params.optimisation_strategy} \
-                                  -W `< ${weak_penalty}` -S `< ${strong_penalty}` -n ${params.number_of_samples} \
-                                  -p ${signature_prefix} -i ${params.input_tables} -s ${params.signature_tables} -o "./"
-  cp ${dataset}/output_${dataset}_${mutation_type}_residuals.csv ${params.input_tables}/${dataset}/
-  cp ${dataset}/output_${dataset}_${mutation_type}_fitted_values.csv ${params.input_tables}/${dataset}/
-  """
+include { NNLS_unoptimized_workflow as UnoptimizedNNLS } from './modules/nnls' addParams(
+    signature_prefix: signature_prefix
+)
+include { NNLS_optimized_workflow as OptimizedNNLS } from './modules/nnls' addParams(
+    signature_prefix: signature_prefix
+)
+include { NNLS_bootstrap_workflow as OptimizedNNLSforBootstrap } from './modules/nnls' addParams(
+    signature_prefix: signature_prefix
+)
+include { FINAL_NNLS_workflow } from './modules/nnls' addParams(
+    signature_prefix: signature_prefix
+)
+include { FINAL_NNLS_BOOTSTRAP_workflow } from './modules/nnls' addParams(
+    signature_prefix: signature_prefix
+)
+include { simulate_data_workflow } from './modules/simulations' addParams(
+    signature_prefix: signature_prefix
+)
+include { BOOTSTRAP_TABLES_workflow } from './modules/bootstrap_tables' addParams(
+    signature_prefix: signature_prefix
+)
+include { FINAL_BOOTSTRAP_TABLES_workflow } from './modules/bootstrap_tables' addParams(
+    signature_prefix: signature_prefix
+)
+include { OPTIMAL_PENALTIES_workflow } from './modules/optimal_penalties' addParams(
+    signature_prefix: signature_prefix
+)
+include { OPTIMISATION_PLOTS_workflow } from './modules/optimisation_plots' addParams(
+    signature_prefix: signature_prefix
+)
+
+// Main workflow
+workflow {
+    // Set up input channels based on parameters
+    // Priority: specific files > SigProfiler outputs > default directories
+    
+    // Handle specific file inputs (highest priority)
+    if (params.signatures_file) {
+        // Convert specific signature file
+        convert_data_workflow(params.dataset, file(params.signatures_file).toAbsolutePath(), 'specific_signature_files', mutation_types)
+        signature_files_channel = convert_data_workflow.out.signature_files
+        
+        if (params.plot_signatures) {
+            for (mutation_type in mutation_types) {
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/signature_tables", 'signatures')
+            }
+        }
+    } else if (params.SP_extractor_output_path) {
+        // Convert SigProfiler extractor output to temp location
+        convert_data_workflow(params.dataset, params.SP_extractor_output_path, 'signature_tables', mutation_types)
+        signature_files_channel = convert_data_workflow.out.signature_files
+        
+        if (params.plot_signatures) {
+            for (mutation_type in mutation_types) {
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/signature_tables", 'signatures')
+            }
+        }
+    } else {
+        // Use default signature tables
+        stage_default_signatures_workflow()
+        signature_files_channel = stage_default_signatures_workflow.out.staged_signature_tables
+        
+        if (params.plot_signatures) {
+            for (mutation_type in mutation_types) {
+                plot_spectra_workflow(params.dataset, mutation_type, params.signature_tables, 'signatures')
+            }
+        }
+    }
+    
+    // Handle specific mutation table input (highest priority)
+    if (params.input_mutation_table) {
+        // Convert specific mutation table file
+        convert_data_workflow(params.dataset, file(params.input_mutation_table).toAbsolutePath(), 'specific_mutation_files', mutation_types)
+        input_files_channel = convert_data_workflow.out.input_files
+        
+        if (params.plot_input_spectra) {
+            for (mutation_type in mutation_types) {
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/input_tables", 'mutation_spectra')
+            }
+        }
+    } else if (params.SP_extractor_output_path && !params.SP_matrix_generator_output_path) {
+        // Convert extractor matrices to temp location
+        convert_data_workflow(params.dataset, params.SP_extractor_output_path, 'extractor_matrices', mutation_types)
+        input_files_channel = convert_data_workflow.out.input_files
+        
+        if (params.plot_input_spectra) {
+            for (mutation_type in mutation_types) {
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/input_tables", 'mutation_spectra')
+            }
+        }
+    } else if (params.SP_matrix_generator_output_path) {
+        // Convert matrix generator output to temp location
+        convert_data_workflow(params.dataset, params.SP_matrix_generator_output_path, 'matrix_generator_matrices', mutation_types)
+        input_files_channel = convert_data_workflow.out.input_files
+        
+        if (params.plot_input_spectra) {
+            for (mutation_type in mutation_types) {
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/input_tables", 'mutation_spectra')
+            }
+        }
+    } else {
+        // Use default input tables - collect them into a channel
+        stage_default_inputs_workflow(params.dataset)
+        input_files_channel = stage_default_inputs_workflow.out.staged_input_tables
+        
+        if (params.plot_input_spectra) {
+            for (mutation_type in mutation_types) {
+                plot_spectra_workflow(params.dataset, mutation_type, params.input_tables, 'mutation_spectra')
+            }
+        }
+    }
+
+    // Process each mutation type sequentially to avoid channel conflicts
+    for (mutation_type in mutation_types) {
+        // Run unoptimized NNLS
+        UnoptimizedNNLS(
+            params.dataset,
+            mutation_type,
+            input_files_channel,
+            signature_files_channel
+        )
+
+        // Run simulation workflow
+        simulate_data_workflow(
+            UnoptimizedNNLS.out.dataset_mutation_pairs,
+            UnoptimizedNNLS.out.mutations_table
+        )
+        
+        def optimized_outputs = []
+        def bootstrap_outputs = []
+        // Run optimized NNLS for each threshold combination
+        for (weak_threshold in weak_thresholds) {
+            for (strong_threshold in strong_thresholds) {
+                // Standard optimized NNLS
+                OptimizedNNLS(
+                    params.dataset,
+                    mutation_type,
+                    simulate_data_workflow.out.all_simulation_outputs,
+                    signature_files_channel,
+                    weak_threshold,
+                    strong_threshold
+                )
+                optimized_outputs.add(OptimizedNNLS.out.dataset_mutation_pairs)
+                
+                // Optimized NNLS with bootstrap
+                OptimizedNNLSforBootstrap(
+                    params.dataset,
+                    mutation_type,
+                    simulate_data_workflow.out.all_simulation_outputs,
+                    signature_files_channel,
+                    weak_threshold,
+                    strong_threshold,
+                    number_of_bootstrapped_samples_in_optimisation
+                )
+                bootstrap_outputs.add(OptimizedNNLSforBootstrap.out.bootstrap_indices)
+            }
+        }
+
+        // Wait for ALL processes to complete
+        all_optimized = Channel.empty().mix(*optimized_outputs).collect()
+        all_bootstrap = Channel.empty().mix(*bootstrap_outputs).collect()
+        
+        // Generate bootstrap tables after ALL optimized runs complete
+        // Wait for both OptimizedNNLS and OptimizedNNLSforBootstrap to finish
+        BOOTSTRAP_TABLES_workflow(
+            UnoptimizedNNLS.out.dataset_mutation_pairs,
+            all_optimized.mix(all_bootstrap).collect(),
+            weak_thresholds,
+            strong_thresholds,
+            number_of_bootstrapped_samples_in_optimisation
+        )
+        
+        // Calculate optimal penalties
+        OPTIMAL_PENALTIES_workflow(
+            BOOTSTRAP_TABLES_workflow.out.bootstrap_tables,
+            UnoptimizedNNLS.out.dataset_mutation_pairs,
+            weak_thresholds,
+            strong_thresholds
+        )
+        
+        // Generate optimization plots
+        OPTIMISATION_PLOTS_workflow(
+            OPTIMAL_PENALTIES_workflow.out.penalties_for_optimisation_plotting,
+            weak_thresholds,
+            strong_thresholds
+        )
+        
+        // Run final NNLS with optimal penalties
+        FINAL_NNLS_workflow(
+            OPTIMAL_PENALTIES_workflow.out.penalties_for_central_NNLS_attribution,
+            OPTIMAL_PENALTIES_workflow.out.optimal_weak_penalty,
+            OPTIMAL_PENALTIES_workflow.out.optimal_strong_penalty,
+            input_files_channel,
+            signature_files_channel
+        )
+        
+        // Run final bootstrap NNLS with optimal penalties
+        FINAL_NNLS_BOOTSTRAP_workflow(
+            OPTIMAL_PENALTIES_workflow.out.penalties_for_bootstrap_NNLS_attribution,
+            OPTIMAL_PENALTIES_workflow.out.optimal_weak_penalty,
+            OPTIMAL_PENALTIES_workflow.out.optimal_strong_penalty,
+            input_files_channel,
+            signature_files_channel,
+            number_of_bootstrapped_samples
+        )
+
+        // Generate final bootstrap tables after final bootstrap NNLS completes
+        FINAL_BOOTSTRAP_TABLES_workflow(
+            FINAL_NNLS_workflow.out.dataset_mutation_pairs,
+            FINAL_NNLS_BOOTSTRAP_workflow.out.bootstrap_indices,
+            number_of_bootstrapped_samples,
+            suffix
+        )
+
+        // Generate final plots
+        ALL_FINAL_PLOTS_workflow(
+            FINAL_NNLS_workflow.out.dataset_mutation_pairs,
+            FINAL_BOOTSTRAP_TABLES_workflow.out.attributions_per_sample,
+            FINAL_BOOTSTRAP_TABLES_workflow.out.signature_prevalences
+        )
+    }
 }
 
-process run_NNLS_bootstrapping {
-  tag "${mutation_type}/${dataset}"
-  publishDir "$baseDir/output_tables", mode: 'copy', overwrite: true
-
-  input:
-  each i from 1..number_of_bootstrapped_samples
-  set dataset, mutation_type from penalties_for_bootstrap_NNLS_attribution
-  file weak_penalty from optimal_weak_penalty_for_bootstrapping
-  file strong_penalty from optimal_strong_penalty_for_bootstrapping
-  // file residuals from central_NNLS_residuals // uncomment in using residuals bootstrapping
-
-  output:
-  file("./${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_${i}_mutations_table.csv")
-  file("./${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_${i}_stat_info.csv")
-  file("./${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_${i}_weights_table.csv")
-  val i into bootstrap_outputs
-
-  when:
-  !params.run_only_optimisation
-
-  script:
-  """
-  python $baseDir/bin/run_NNLS.py -B -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \
-                                  --optimisation_strategy ${params.optimisation_strategy} --bootstrap_method ${params.bootstrap_method} \
-                                  -W `< ${weak_penalty}` -S `< ${strong_penalty}` -n ${params.number_of_samples} \
-                                  -p ${signature_prefix} -i ${params.input_tables} -s ${params.signature_tables} -o "./"
-  mkdir -p ${dataset}/bootstrap_output
-  mv ${dataset}/output_${dataset}_${mutation_type}_mutations_table.csv ${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_${i}_mutations_table.csv
-  mv ${dataset}/output_${dataset}_${mutation_type}_weights_table.csv ${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_${i}_weights_table.csv
-  mv ${dataset}/output_${dataset}_${mutation_type}_stat_info.csv ${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_${i}_stat_info.csv
-  """
-}
-
-process make_bootstrap_tables {
-  tag "${mutation_type}/${dataset}"
-  publishDir "$baseDir/output_tables", mode: 'copy', overwrite: true
-
-  input:
-  set dataset, mutation_type from attribution_for_tables
-  val i from bootstrap_outputs.collect()
-
-  output:
-  file("./${dataset}/CIs_${dataset}_${mutation_type}_bootstrap_output_${suffix}.csv") into final_outputs_post_bootstrap
-  file("./${dataset}/signatures_prevalences_${dataset}_${mutation_type}.csv") into signature_prevalences
-  file("./${dataset}/attributions_per_sample_${dataset}_${mutation_type}_bootstrap_output_${suffix}.json") into attributions_per_sample
-  file("./${dataset}/attributions_per_signature_${dataset}_${mutation_type}_bootstrap_output_${suffix}.json")
-  file("./${dataset}/stat_metrics_${dataset}_${mutation_type}_bootstrap_output_${suffix}.json")
-  file("./${dataset}/pruned_attribution_${dataset}_${mutation_type}_abs_mutations.csv")
-  file '*/truth_studies/*.csv' optional true
-  file '*/truth_studies/*.json' optional true
-
-  script:
-  """
-  mkdir -p $baseDir/output_tables/${dataset}
-  [[ ${dataset} == *"SIM"* ]] && [[ ${mutation_type} == "SBS" ]] && \
-    cp ${params.input_tables}/${dataset}/WGS_${dataset}.${params.SBS_context}.weights.csv $baseDir/output_tables/${dataset}/
-  [[ ${dataset} == *"SIM"* ]] && [[ ${mutation_type} == "DBS" ]] && \
-    cp ${params.input_tables}/${dataset}/WGS_${dataset}.dinucs.weights.csv $baseDir/output_tables/${dataset}/
-  [[ ${dataset} == *"SIM"* ]] && [[ ${mutation_type} == "ID" ]] && \
-    cp ${params.input_tables}/${dataset}/WGS_${dataset}.indels.weights.csv $baseDir/output_tables/${dataset}/
-  [[ ${dataset} == *"SIM"* ]] && [[ ${mutation_type} == "SV" || ${mutation_type} == "CNV" ]] && \
-    cp ${params.input_tables}/${dataset}/WGS_${dataset}.${mutation_type}.weights.csv $baseDir/output_tables/${dataset}/
-  python $baseDir/bin/make_bootstrap_tables.py -d ${dataset} -t ${mutation_type} -p ${signature_prefix} ${abs_flag} \
-                                               -c ${params.SBS_context} -S ${params.signature_tables} -l ${params.confidence_level} \
-                                               -T ${params.signature_attribution_thresholds.join(' ')} \
-                                               -i $baseDir/output_tables -o "./" -n ${number_of_bootstrapped_samples}
-  """
-}
-
-process plot_bootstrap_attributions {
-  tag "${mutation_type}/${dataset}"
-  publishDir "${params.plots_output_path}", mode: 'move', overwrite: true
-
-  input:
-  set dataset, mutation_type from attribution_for_bootstrap_plots
-  file bootstrap_attributions from attributions_per_sample.collect()
-
-  when:
-  params.plot_bootstrap_attributions
-
-  output:
-  file '*/*/bootstrap_plots/*.pdf' optional true
-  file '*/*/bootstrap_plots/*/*.pdf' optional true
-  file '*/*/bootstrap_plots/*/*/*.pdf' optional true
-
-  script:
-  """
-  python $baseDir/bin/plot_bootstrap_attributions.py -d ${dataset} -t ${mutation_type} -p ${signature_prefix} ${abs_flag} \
-                                                     -c ${params.SBS_context} -S ${params.signature_tables} -I ${params.input_tables} \
-                                                     -i $baseDir/output_tables -o "./" -n ${number_of_bootstrapped_samples}
-  """
-}
-
-process plot_metrics {
-  tag "${mutation_type}/${dataset}"
-  publishDir "${params.plots_output_path}", mode: 'move', overwrite: true
-
-  input:
-  set dataset, mutation_type from attribution_for_metrics
-  file prevalences from signature_prevalences.collect()
-
-  when:
-  params.plot_metrics
-
-  output:
-  file '*/*/bootstrap_plots/*.pdf' optional true
-  file '*/*/bootstrap_plots/*/*.pdf' optional true
-  file '*/*/bootstrap_plots/*/*/*.pdf' optional true
-
-  script:
-  """
-  python $baseDir/bin/plot_metrics.py -d ${dataset} -t ${mutation_type} -l ${params.metric_threshold} -i $baseDir/output_tables -o "./"
-  """
-}
-
-process plot_fitted_spectra {
-  tag "${mutation_type}/${dataset}"
-  publishDir "${params.plots_output_path}", mode: 'move'
-
-  input:
-  set dataset, mutation_type from attribution_for_spectra_plots
-
-  output:
-  file '*/*/*.pdf' optional true
-  file '*/*/*/*.pdf' optional true
-  file '*/*/*/*/*.pdf' optional true
-  file '*/*/*/*/*/*.pdf' optional true
-
-  when:
-  params.plot_fitted_spectra
-
-  script:
-  """
-  python $baseDir/bin/plot_mutation_spectra.py -f -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \
-                                                -i $baseDir/output_tables ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
-  python $baseDir/bin/plot_mutation_spectra.py -f -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \
-                                                -r -i $baseDir/output_tables ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
-  python $baseDir/bin/plot_mutation_spectra.py -C -f -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \
-                                                -i $baseDir/output_tables ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
-  python $baseDir/bin/plot_mutation_spectra.py -C -f -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \
-                                                -r -i $baseDir/output_tables ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
-  """
-}
-
-process plot_residuals {
-  tag "${mutation_type}/${dataset}"
-  publishDir "${params.plots_output_path}", mode: 'move'
-
-  input:
-  set dataset, mutation_type from attribution_for_residuals
-
-  output:
-  file '*/*/*.pdf' optional true
-  file '*/*/*/*.pdf' optional true
-  file '*/*/*/*/*.pdf' optional true
-  file '*/*/*/*/*/*.pdf' optional true
-
-  when:
-  params.plot_residuals
-
-  script:
-  """
-  python $baseDir/bin/plot_mutation_spectra.py -H -R -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \
-                                                -i $baseDir/output_tables ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
-  python $baseDir/bin/plot_mutation_spectra.py -C -R -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \
-                                                -i $baseDir/output_tables ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
-  """
-}
-
-process move_bootstrap_outputs {
-  tag "${dataset}"
-  publishDir "${params.tables_output_path}", mode: 'move', overwrite: true
-
-  input:
-  file output from final_outputs_post_bootstrap.collect()
-  each dataset from params.dataset
-  path output_path from "$baseDir/output_tables"
-
-  output:
-  file("MSA_output_${dataset}.tar.gz")
-
-  shell:
-  """
-  cp -r ${output_path}/${dataset} .
-  mkdir outputs_optimisation
-  cp -r ${params.optimisation_NNLS_output_path}/SIM_${dataset} outputs_optimisation/
-  cp -r ${params.optimisation_NNLS_output_path}/SIM_${dataset}_${params.SBS_context}* outputs_optimisation
-  tar cvfh MSA_output_${dataset}.tar.gz ${dataset} outputs_optimisation
-  rm -rf ${dataset}
-  rm -rf outputs_optimisation
-  """
-}

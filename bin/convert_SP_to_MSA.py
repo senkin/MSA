@@ -431,7 +431,7 @@ if __name__ == '__main__':
         process_signature_tables(
             signature_files_by_type, signatures, options.contexts, 
             options.output_path, options.reindexed_signatures_prefix, options.COSMIC,
-            specific_files_mode=True  # Use parameters directly, don't infer from filenames
+            specific_files_mode=True if options.input_files else False  # Use parameters directly, don't infer from filenames
         )
     
     else:
@@ -471,7 +471,7 @@ if __name__ == '__main__':
         process_mutation_tables(
             input_files_by_type, signatures, options.dataset_name, 
             options.output_path, options.contexts, options.use_extractor_for_mutation_tables,
-            specific_files_mode=True  # Use parameters directly, don't infer from filenames
+            specific_files_mode=True if options.input_files else False  # Use parameters directly, don't infer from filenames
         )
     
     print('Conversion completed successfully!')
