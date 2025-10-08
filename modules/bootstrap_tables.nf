@@ -98,13 +98,13 @@ workflow FINAL_BOOTSTRAP_TABLES_workflow {
         # Copy simulation files if this is a simulated dataset
         if [[ ${dataset} == *"SIM"* ]]; then
             if [[ ${mutation_type} == "SBS" ]]; then
-                cp ${workflow.projectDir}/${dataset}/WGS_${dataset}.${params.SBS_context}.weights.csv ${params.tables_output_path}/${dataset}/
+                cp ${workflow.projectDir}/input_mutation_tables/${dataset}/WGS_${dataset}.${params.SBS_context}.weights.csv ${params.tables_output_path}/${dataset}/
             elif [[ ${mutation_type} == "DBS" ]]; then
-                cp ${workflow.projectDir}/${dataset}/WGS_${dataset}.dinucs.weights.csv ${params.tables_output_path}/${dataset}/
+                cp ${workflow.projectDir}/input_mutation_tables/${dataset}/WGS_${dataset}.dinucs.weights.csv ${params.tables_output_path}/${dataset}/
             elif [[ ${mutation_type} == "ID" ]]; then
-                cp ${workflow.projectDir}/${dataset}/WGS_${dataset}.indels.weights.csv ${params.tables_output_path}/${dataset}/
+                cp ${workflow.projectDir}/input_mutation_tables/${dataset}/WGS_${dataset}.indels.weights.csv ${params.tables_output_path}/${dataset}/
             elif [[ ${mutation_type} == "SV" || ${mutation_type} == "CNV" ]]; then
-                cp ${workflow.projectDir}/${dataset}/WGS_${dataset}.${mutation_type}.weights.csv ${params.tables_output_path}/${dataset}/
+                cp ${workflow.projectDir}/input_mutation_tables/${dataset}/WGS_${dataset}.${mutation_type}.weights.csv ${params.tables_output_path}/${dataset}/
             fi
         fi
         
