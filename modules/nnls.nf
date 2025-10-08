@@ -1,6 +1,6 @@
 // modules/nnls.nf
 
-// def signature_prefix = (params.SP_extractor_output_path) ? params.signature_prefix + "_conv" : params.signature_prefix
+
 
 // Unoptimized NNLS workflow
 workflow NNLS_unoptimized_workflow {
@@ -34,7 +34,7 @@ workflow NNLS_unoptimized_workflow {
         """
         mkdir -p ${params.temp_path}
         cp -a ${params.signature_tables} ${params.temp_path}
-        python $baseDir/bin/run_NNLS.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} \\
+        python ${workflow.projectDir}/bin/run_NNLS.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} \\
             -p ${params.signature_prefix} -i ${params.temp_path}/input_tables -s ${params.temp_path}/signature_tables -o "./" \\
             -n ${params.number_of_samples}
         """
@@ -113,7 +113,7 @@ workflow NNLS_optimized_workflow {
         fi
         
         # Run NNLS analysis
-        python $baseDir/bin/run_NNLS.py -d SIM_${dataset} -t ${mutation_type} -c ${params.SBS_context} \\
+        python ${workflow.projectDir}/bin/run_NNLS.py -d SIM_${dataset} -t ${mutation_type} -c ${params.SBS_context} \\
             -p ${params.signature_prefix} --optimisation_strategy ${params.optimisation_strategy} \\
             -W ${weak_threshold} -S ${strong_threshold} \\
             -i ${params.temp_path}/output_tables -s ${params.temp_path}/signature_tables \\
@@ -196,7 +196,7 @@ workflow NNLS_bootstrap_workflow {
         fi
         
         # Run bootstrap NNLS analysis
-        python $baseDir/bin/run_NNLS.py -B -d SIM_${dataset} -t ${mutation_type} -c ${params.SBS_context} -x \\
+        python ${workflow.projectDir}/bin/run_NNLS.py -B -d SIM_${dataset} -t ${mutation_type} -c ${params.SBS_context} -x \\
             --optimisation_strategy ${params.optimisation_strategy} \\
             --bootstrap_method ${params.bootstrap_method} \\
             -W ${weak_threshold} -S ${strong_threshold} --add_suffix \\
@@ -274,7 +274,7 @@ workflow FINAL_NNLS_workflow {
         script:
         def optimised_flag = params.optimised ? "-x" : ""
         """
-        python $baseDir/bin/run_NNLS.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \\
+        python ${workflow.projectDir}/bin/run_NNLS.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \\
             --optimisation_strategy ${params.optimisation_strategy} \\
             -W `< ${weak_penalty}` -S `< ${strong_penalty}` -n ${params.number_of_samples} \\
             -p ${params.signature_prefix} -i ${params.temp_path}/input_tables -s ${params.temp_path}/signature_tables -o "./"
@@ -338,7 +338,7 @@ workflow FINAL_NNLS_BOOTSTRAP_workflow {
         script:
         def optimised_flag = params.optimised ? "-x" : ""
         """
-        python $baseDir/bin/run_NNLS.py -B -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \\
+        python ${workflow.projectDir}/bin/run_NNLS.py -B -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \\
             --optimisation_strategy ${params.optimisation_strategy} --bootstrap_method ${params.bootstrap_method} \\
             -W `< ${weak_penalty}` -S `< ${strong_penalty}` -n ${params.number_of_samples} \\
             -p ${params.signature_prefix} -i ${params.temp_path}/input_tables -s ${params.temp_path}/signature_tables -o "./"

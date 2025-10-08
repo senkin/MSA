@@ -32,7 +32,7 @@ workflow simulate_data_workflow {
 
         script:
         """
-        python $baseDir/bin/simulate_data.py \
+        python ${workflow.projectDir}/bin/simulate_data.py \
             -d SIM_${dataset} \
             -t ${mutation_type} \
             -c ${params.SBS_context} \

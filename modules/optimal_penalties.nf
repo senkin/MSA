@@ -35,7 +35,7 @@ workflow OPTIMAL_PENALTIES_workflow {
         def prioritised_signatures_flag = params.signatures_to_prioritise ? "--signatures_to_prioritise " + params.signatures_to_prioritise.join(' ') : ''
         
         """
-        python $baseDir/bin/calculate_optimal_penalties.py -d SIM_${dataset} -t ${mutation_type} \\
+        python ${workflow.projectDir}/bin/calculate_optimal_penalties.py -d SIM_${dataset} -t ${mutation_type} \\
             -I ${params.temp_path}/output_tables/SIM_${dataset} \\
             -i ${params.optimisation_NNLS_output_path} -o "./" \\
             -c ${params.SBS_context} \\

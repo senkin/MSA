@@ -29,7 +29,7 @@ workflow OPTIMISATION_PLOTS_workflow {
         
         script:
         """
-        python $baseDir/bin/plot_metric_heatmaps.py -d SIM_${dataset} -t ${mutation_type} \\
+        python ${workflow.projectDir}/bin/plot_metric_heatmaps.py -d SIM_${dataset} -t ${mutation_type} \\
             -i ${params.optimisation_NNLS_output_path} -o "./" \\
             -c ${params.SBS_context} \\
             -l ${params.metric_threshold} \\

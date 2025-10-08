@@ -23,7 +23,7 @@ params.SP_matrix_generator_output_path = null // optional path to SigProfilerMat
 params.COSMIC_signatures = false // if set to true, COSMIC signatures are used form SigProfiler output, otherwise de-novo ones are used
 params.dataset = 'SIM_test' // dataset name. Input matrices to be provided in params.input_tables/params.dataset, unless SigProfiler inputs are used
 params.mutation_types = ['SBS'] // add or remove mutation types if needed
-params.input_tables = "$baseDir/input_mutation_tables"
+params.input_tables = "${workflow.projectDir}/input_mutation_tables"
 params.SBS_context = 96 // 96, 192, 288, 1536 context matrices can be provided (SBS only)
 params.number_of_samples = -1 // number of samples to analyse (-1 means all available)
 
@@ -34,11 +34,11 @@ params.plots_output_path = params.output_path + "/plots"
 params.temp_path = params.output_path + "/temp"
 
 // signatures to use
-params.signature_tables = "$baseDir/signature_tables"
+params.signature_tables = "${workflow.projectDir}/signature_tables"
 params.signature_prefix = "sigProfiler" // prefix of signature files to use (e.g. sigProfiler, sigRandom)
 
 // simulations parameters
-params.run_only_simulations = false // set to true if only simulations are needed, these will be produced in $baseDir/output_tables folder
+params.run_only_simulations = false // set to true if only simulations are needed, these will be produced in output_tables folder
 params.number_of_simulated_samples = -1 // number of simulations to run (-1 means automatically apply a rounded factor of ten but not less than 1000)
 params.add_noise = true // add noise in simulations (recommended)
 params.noise_type = "gaussian" // set the type of noise in simulations: gaussian, poisson or negative_binomial (Gaussian by default)
