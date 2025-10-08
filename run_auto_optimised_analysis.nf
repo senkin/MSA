@@ -98,6 +98,7 @@ number_of_bootstrapped_samples = (test_run) ? 10 : params.number_of_bootstrapped
 number_of_simulated_samples = (test_run) ? 10 : params.number_of_simulated_samples
 weak_thresholds = (test_run) ? [0, 0.01, 0.02] : params.weak_thresholds
 strong_thresholds = (test_run) ? [0] : params.strong_thresholds
+signature_prefix = (test_run) ? "sigTest" : signature_prefix
 
 params.help = null
 
