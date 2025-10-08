@@ -28,7 +28,7 @@ params.SBS_context = 96 // 96, 192, 288, 1536 context matrices can be provided (
 params.number_of_samples = -1 // number of samples to analyse (-1 means all available)
 
 // output paths
-params.output_path = "."
+params.output_path = "${workflow.launchDir}" // specify full path to output folder, default is current working directory
 params.tables_output_path = params.output_path + "/output_tables"
 params.plots_output_path = params.output_path + "/plots"
 params.temp_path = params.output_path + "/temp"
@@ -98,8 +98,6 @@ number_of_bootstrapped_samples = (test_run) ? 10 : params.number_of_bootstrapped
 number_of_simulated_samples = (test_run) ? 10 : params.number_of_simulated_samples
 weak_thresholds = (test_run) ? [0, 0.01, 0.02] : params.weak_thresholds
 strong_thresholds = (test_run) ? [0] : params.strong_thresholds
-// mutation_types = (test_run) ? ['SBS', 'DBS', 'ID'] : params.mutation_types
-// mutation_types = (test_run) ? ['DBS'] : params.mutation_types
 
 params.help = null
 
