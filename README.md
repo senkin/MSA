@@ -2,28 +2,28 @@
 
 ![logo](MSA.png)
 
-Mutational signature attribution analysis, featuring automised optimisation study with simulated data.
+Mutational signature attribution analysis, featuring automated optimisation study with simulated data.
 
 ## Introduction
-The purpose of this Readme is to provide a guide for the quick start of using MSA. An extensive Wiki page detailing the usage of this tool can be found [here](https://gitlab.com/s.senkin/MSA/-/wikis/home).
+The purpose of this README is to provide a guide for the quick start of using MSA. An extensive Wiki page detailing the usage of this tool can be found [here](https://gitlab.com/s.senkin/MSA/-/wikis/home).
 
 ## Running with Nextflow
 The best way to run the code is by using [Nextflow](https://www.nextflow.io/).
 Once you have installed Nextflow, run the test job locally or on your favourite cluster:
 
-```
+```bash
 nextflow run https://gitlab.com/s.senkin/MSA -profile conda
 ```
 
-**Important caveat**: the pipeline is written in Nextflow DSL1 which is not supported by latest versions of Nextflow. Please roll back to Nextflow 22.10.4 or earlier by setting the *NXF_VER* variable in your environment:
+**Important**: The pipeline has been updated to Nextflow DSL2 and requires Nextflow version 21.04.0 or later. The version can be changed using the following command:
 
-```
-export NXF_VER=22.10.4
+```bash
+export NXF_VER=23.10.0
 ```
 
 It is recommended to use [docker](https://www.docker.com/) or [singularity](https://sylabs.io/singularity/) profiles as these normally provide greater stability and reproducibility than [conda](https://conda.io).
 
-The pipeline should run and produce all the results automatically. You can also retrieve the code ([see below](https://gitlab.com/s.senkin/MSA#getting-started)) in order to adjust all the inputs and parameters. In the [run_auto_optimised_analysis.nf](run_auto_optimised_analysis.nf) file various parameters can be specified.
+The pipeline should run and produce all the results automatically. You can also retrieve the code ([see below](#getting-started)) in order to adjust all the inputs and parameters. In the [run_auto_optimised_analysis.nf](run_auto_optimised_analysis.nf) file various parameters can be specified.
 
 ## Running on SigProfiler output
 
@@ -31,92 +31,205 @@ MSA natively supports [SigProfilerExtractor](https://github.com/AlexandrovLab/Si
 
 The simplest way to run is as follows:
 
-```
-nextflow run https://gitlab.com/s.senkin/MSA -profile docker --dataset SP_test \
-                              --SP_extractor_output_path /full/path/to/SP_extractor_output/
+```bash
+nextflow run https://gitlab.com/s.senkin/MSA -profile conda \
+    --dataset SP_test \
+    --SP_extractor_output_path /full/path/to/SP_extractor_output/
 ```
 
 If [SigProfilerMatrixGenerator](https://github.com/AlexandrovLab/SigProfilerMatrixGenerator) output is provided, it will take priority over the [SigProfilerExtractor](https://github.com/AlexandrovLab/SigProfilerExtractor) one for input mutation matrices:
 
+```bash
+nextflow run https://gitlab.com/s.senkin/MSA -profile conda \
+    --dataset SP_test \
+    --SP_matrix_generator_output_path /full/path/to/SP_matrix_generator_output/ \
+    --SP_extractor_output_path /full/path/to/SP_extractor_output/
 ```
-nextflow run https://gitlab.com/s.senkin/MSA -profile docker --dataset SP_test \
-                              --SP_matrix_generator_output_path /full/path/to/SP_matrix_generator_output/ \
-                              --SP_extractor_output_path /full/path/to/SP_extractor_output/
+
+## Running with specific input files
+
+MSA now supports direct specification of individual mutation tables and signature files:
+
+```bash
+nextflow run https://gitlab.com/s.senkin/MSA -profile conda \
+    --dataset my_data \
+    --input_mutation_table /path/to/mutations.txt \
+    --signatures_file /path/to/signatures.txt \
+    --mutation_types SBS \
+    --SBS_context 96
 ```
+
+**Note**: When using specific files, you must specify exactly ONE mutation type and (for SBS) ONE context.
 
 ## Options
 
 All parameters are described in the dedicated [wiki page](https://gitlab.com/s.senkin/MSA/-/wikis/Parameters-description-table). Most general parameters are listed below.
 
+### Input Priority
+
+The pipeline processes inputs in the following priority order:
+1. **Specific files** (highest): `--input_mutation_table` and `--signatures_file`
+2. **SigProfiler outputs**: `--SP_extractor_output_path` and `--SP_matrix_generator_output_path`
+3. **Default directories** (lowest): `--input_tables` and `--signature_tables`
+
 ### General parameters
 
-| Parameters  | Default value | Description |
-|-----------|-------------|-------------|
-| --help | null | print usage and optional parameters |
-| --SP_matrix_generator_output_path | null | optionally use SigProfilerMatrixGenerator output from specified **full path** |
-| --SP_extractor_output_path | null | optionally use SigProfilerExtractor output from specified **full path** to attribute signatures extracted by SigProfiler |
-| --dataset | SIM_test | set the name of the dataset. If no SigProfiler output is provided, the matrices must exist in params.input_tables folder (see example) |
-| --input_tables | $baseDir/input_mutation_tables | if not using SigProfiler outputs, **full path** to input mutation tables, the repository one is used by default |
-| --signature_tables | $baseDir/signature_tables | if not using SigProfiler outputs, **full path** to input signature tables, the repository one is used by default |
-| --signature_prefix | sigProfiler | if not using SigProfiler outputs, prefix of signature files to use, must be located in signature_tables folder (e.g. sigProfiler, sigRandom) |
-| --output_path | . | output path for plots and tables |
-| --mutation_types | \['SBS'\] | mutation types to analyse. Only one can be specified from command line, or a list in the run_auto_optimised_analysis.nf file |
-| --number_of_samples | -1 | number of samples to analyse (-1 means all available) |
+| Parameter | Default value | Description |
+|-----------|---------------|-------------|
+| --help | null | Print usage and optional parameters |
+| --input_mutation_table | null | Specific mutation table file to convert and use (overrides all other inputs) |
+| --signatures_file | null | Specific signature file to convert and use (overrides all other inputs) |
+| --SP_matrix_generator_output_path | null | Use SigProfilerMatrixGenerator output from specified **full path** |
+| --SP_extractor_output_path | null | Use SigProfilerExtractor output from specified **full path** to attribute signatures |
+| --dataset | SIM_test | Set the name of the dataset |
+| --input_tables | $baseDir/input_mutation_tables | **Full path** to input mutation tables directory |
+| --signature_tables | $baseDir/signature_tables | **Full path** to input signature tables directory |
+| --signature_prefix | sigProfiler | Prefix of signature files (e.g. sigProfiler, sigRandom) |
+| --output_path | . | Output path for plots and tables |
+| --temp_path | $output_path/temp | Temporary path for converted inputs |
+| --mutation_types | ['SBS'] | Mutation types to analyse. Only ONE can be specified from command line; use list in script for multiple |
+| --number_of_samples | -1 | Number of samples to analyse (-1 means all available) |
 | --SBS_context | 96 | SBS context to use (96, 192, 288, 1536, or 4608) |
-| --COSMIC_signatures | false | if set to true, COSMIC signatures are used form SigProfiler output, otherwise de-novo ones are used |
+| --COSMIC_signatures | false | If true, use COSMIC signatures from SigProfiler output; otherwise use de-novo |
+
+### Output structure
+
+The pipeline organizes outputs as follows:
+
+```
+output_path/
+├── output_tables/              # Final NNLS results
+│   └── {dataset}/
+│       ├── output_*_mutations_table.csv
+│       ├── output_*_weights_table.csv
+│       ├── signatures_prevalences_*.csv
+│       └── bootstrap_output/
+├── output_tables_unoptimised/  # Unoptimized results
+├── plots/                      # All generated plots
+└── temp/                       # Temporary conversions
+    ├── input_tables/
+    └── signature_tables/
+```
 
 ## Running manually
 
 ### Getting started
 
 Retrieve the code:
-```
+```bash
 git clone https://gitlab.com/s.senkin/MSA.git
 cd MSA
 ```
 
-Run the fully automised pipeline with optimisation on the test dataset (or adjust parameters/input matrices accordingly, specifying the **full path** to them):
-```
-nextflow run run_auto_optimised_analysis.nf -profile docker --dataset SIM_test --input_tables $PWD/input_mutation_tables --output_path test
+Run the fully automated pipeline with optimisation on the test dataset:
+```bash
+nextflow run run_auto_optimised_analysis.nf -profile conda \
+    --dataset SIM_test \
+    --output_path test
 ```
 
-Alternatively, to run the pipeline without optimisation, using fixed penalties on the test dataset:
+Alternatively, to run the pipeline without optimisation, using fixed penalties (DSL1 only, please downgrade Nextflow with `export NXF_VER=22.10.4`):
+```bash
+nextflow run run_analysis.nf -profile conda \
+    --dataset SIM_test \
+    --weak_threshold 0.02 \
+    --output_path test
 ```
-nextflow run run_analysis.nf -profile docker --dataset SIM_test --weak_threshold 0.02 --input_tables $PWD/input_mutation_tables --output_path test
+
+### Using resume
+
+The pipeline partially supports Nextflow's `-resume` functionality to restart from cached processes:
+
+```bash
+nextflow run run_auto_optimised_analysis.nf -profile conda -resume \
+    --dataset my_data \
+    --output_path results
 ```
 
 ### Setting up dependencies
 
-If you can not run *nextflow*, you can still run some basic analysis manually (scripts in the *./bin* folder).
-Dependencies so far are: *pandas*, *numpy*, *scipy*, *matplotlib* and *seaborn*. If you don't have them, the easiest way is to set up the virtual environment using [conda](https://conda.io) package manager:
+If you cannot run *nextflow*, you can still run some basic analysis manually (scripts in the *./bin* folder).
+Dependencies: *pandas*, *numpy*, *scipy*, *matplotlib* and *seaborn*. 
 
-```
+Set up the virtual environment using [conda](https://conda.io):
+
+```bash
 conda env create -f environment.yml
 ```
 
-This only needs to be done once. Afterwards, just activate the environment whenever needed:
+This only needs to be done once. Afterwards, activate the environment:
 
+```bash
+conda activate msa
 ```
-source activate msa
-```
 
-Alternatively, you can use *docker* yourself with the *Dockerfile* provided, or use ready-made images ([docker](https://hub.docker.com/r/ssenkin/msa/tags) or [singularity](https://cloud.sylabs.io/library/ssenkin/default/msa)).
+Alternatively, you can use *docker* with the provided *Dockerfile*, or use ready-made images ([docker](https://hub.docker.com/r/ssenkin/msa/tags) or [singularity](https://cloud.sylabs.io/library/ssenkin/default/msa)).
 
+### Simulating data
 
-### Simulating data (if not using automised pipeline)
+* [input_mutation_tables/SIM](input_mutation_tables/SIM) folder contains a set produced with existing (PCAWG or COSMIC) signatures using normal distributions of mutational burdens.
 
-* [input_mutation_tables/SIM](input_mutation_tables/SIM) folder contains a set produced with existing (PCAWG or COSMIC) signatures. [np.random.normal](https://docs.scipy.org/doc/numpy/reference/generated/numpy.random.normal.html) function was used to generate normal distributions of mutational burdens corresponding to each PCAWG signature mentioned in the [signatures_to_generate](bin/simulate_data.py#L9) dictionary in the script, containing Gaussian means and standard deviations for each signature.
-* Note that the distributions are not strictly Gaussian since negative numbers of burdens are replaced by zeros
-* To reproduce the simulated set of samples with reshuffled *SBS1/5/22/40* PCAWG signatures, one can run the following script (without the *-r* option):
-```
+* To reproduce the simulated set of samples with reshuffled *SBS1/5/22/40* PCAWG signatures:
+```bash
 python bin/simulate_data.py -t SBS -c 96 -n 100 -s signature_tables
 ```
 
-* [input_mutation_tables/SIMrand](input_mutation_tables/SIMrand) folder contains a set of 100 simulated samples for 96/192 contexts SBS, as well as dinucs and indels, where each sample contains contributions from **5** randomly selected signatures out of **100** Poisson-generated signatures. To reproduce (e.g. for 96-context SBS, 100 signatures and samples), run:
-```
+* [input_mutation_tables/SIMrand](input_mutation_tables/SIMrand) folder contains simulated samples where each contains contributions from **5** randomly selected signatures out of **100** Poisson-generated signatures. To reproduce:
+```bash
 python bin/generate_random_signatures.py -t SBS -c 96 -n 100
 python bin/simulate_data.py -r -t SBS -c 96 -n 100 -d SIMrand
 ```
-In both scripts, a normal distribution can be used to generate white noise using *-z* option, with a Gaussian centred around **0** for each category of mutations, with standard deviation set by *-Z* option (**2** by default). Additional flags can be viewed in the code or using *-h* option in each script.
 
-The file format produced is the same as that of the PCAWG dataset.
+Both scripts support normal distribution noise using `-z` option with standard deviation set by `-Z` option (**2** by default). Additional flags: use `-h` option.
+
+## Example workflows
+
+### Basic analysis with repository test data
+```bash
+nextflow run run_auto_optimised_analysis.nf -profile conda
+```
+
+### Analysis with SigProfiler extractor output
+```bash
+nextflow run run_auto_optimised_analysis.nf -profile conda \
+    --dataset my_cohort \
+    --SP_extractor_output_path /data/sigprofiler_output \
+    --output_path results
+```
+
+### Analysis with specific mutation table
+```bash
+nextflow run run_auto_optimised_analysis.nf -profile conda \
+    --dataset my_sample \
+    --input_mutation_table data/my_mutations_SBS96.txt \
+    --mutation_types SBS \
+    --SBS_context 96 \
+    --output_path results
+```
+
+### Multiple mutation types (must be set in script)
+Edit `run_auto_optimised_analysis.nf`:
+```groovy
+params.mutation_types = ['SBS', 'DBS', 'ID']
+```
+Then run:
+```bash
+nextflow run run_auto_optimised_analysis.nf -profile conda \
+    --dataset my_data \
+    --output_path results
+```
+
+## Changes from DSL1
+
+Key improvements in the DSL2 version:
+- Modern Nextflow syntax (DSL2)
+- Improved caching and resume functionality
+- Support for specific file inputs
+- Cleaner module organization
+- All temporary files in configurable temp directory
+- Better error handling and validation
+- Unified output directory structure
+
+## Citation
+
+If you use this pipeline, please cite the original publication and the MSA repository.
