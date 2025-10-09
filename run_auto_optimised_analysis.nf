@@ -80,17 +80,7 @@ params.show_nontranscribed_region = false // only wortks with higher contexts (2
 params.signature_attribution_thresholds = 0..20
 
 // helper flags for scripts (automatic based on parameters)
-optimised_flag = (params.optimised) ? "-x" : ''
-abs_flag = (params.use_absolute_attributions) ? "-a" : ''
 suffix = (params.use_absolute_attributions) ? "abs_mutations" : 'weights'
-error_flag = (params.show_poisson_errors) ? "-e" : ''
-strands_flag = (params.show_strands) ? "-b" : ''
-nontranscribed_flag = (params.show_nontranscribed_region) ? "-n" : ''
-COSMIC_flag = (params.COSMIC_signatures) ? "-C" : ''
-signature_prefix = (params.SP_extractor_output_path) ? params.signature_prefix + "_conv" : params.signature_prefix
-noise_flag = (params.add_noise) ? "-z" : ''
-no_CI_for_penalties_flag = (params.no_CI_for_penalties) ? "--no_CI" : ''
-calculate_penalty_on_average_flag = (params.calculate_penalty_on_average) ? "--average" : ''
 // override number of samples/variations for test run
 test_run = (params.dataset == 'SIM_test') ? true : false
 number_of_bootstrapped_samples_in_optimisation = (test_run) ? 10 : params.number_of_bootstrapped_samples_in_optimisation
@@ -98,7 +88,7 @@ number_of_bootstrapped_samples = (test_run) ? 10 : params.number_of_bootstrapped
 number_of_simulated_samples = (test_run) ? 10 : params.number_of_simulated_samples
 weak_thresholds = (test_run) ? [0, 0.01, 0.02] : params.weak_thresholds
 strong_thresholds = (test_run) ? [0] : params.strong_thresholds
-signature_prefix = (test_run) ? "sigTest" : signature_prefix
+// signature_prefix = (test_run) ? "sigTest" : signature_prefix
 
 params.help = null
 
@@ -169,7 +159,7 @@ log.info params.collect { k,v -> "${k.padRight(34)}: $v" }.join("\n")
 
 // Normalize mutation_types to always be a list (handle command-line string input)
 if (test_run) {
-    mutation_types = ['SBS', 'DBS', 'ID']
+    mutation_types = ['ID']//['SBS', 'DBS', 'ID']
 } else if (params.mutation_types instanceof String) {
     mutation_types = [params.mutation_types]
 } else {
@@ -206,53 +196,19 @@ if (params.input_mutation_table || params.signatures_file) {
 // Include modules
 include { stage_default_signatures_workflow } from './modules/stage_default_inputs'
 include { stage_default_inputs_workflow } from './modules/stage_default_inputs'
-
-include { plot_spectra_workflow } from './modules/plotting' addParams(
-    strands_flag: strands_flag,
-    nontranscribed_flag: nontranscribed_flag,
-    signature_prefix: signature_prefix
-)
-
+include { plot_spectra_workflow } from './modules/plotting'
 include { ALL_FINAL_PLOTS_workflow } from './modules/plotting'
-
-include { convert_data_workflow } from './modules/data_conversion' addParams(
-    strands_flag: strands_flag,
-    nontranscribed_flag: nontranscribed_flag,
-    error_flag: error_flag,
-    COSMIC_flag: COSMIC_flag,
-    signature_prefix: signature_prefix
-)
-
-include { NNLS_unoptimized_workflow as UnoptimizedNNLS } from './modules/nnls' addParams(
-    signature_prefix: signature_prefix
-)
-include { NNLS_optimized_workflow as OptimizedNNLS } from './modules/nnls' addParams(
-    signature_prefix: signature_prefix
-)
-include { NNLS_bootstrap_workflow as OptimizedNNLSforBootstrap } from './modules/nnls' addParams(
-    signature_prefix: signature_prefix
-)
-include { FINAL_NNLS_workflow } from './modules/nnls' addParams(
-    signature_prefix: signature_prefix
-)
-include { FINAL_NNLS_BOOTSTRAP_workflow } from './modules/nnls' addParams(
-    signature_prefix: signature_prefix
-)
-include { simulate_data_workflow } from './modules/simulations' addParams(
-    signature_prefix: signature_prefix
-)
-include { BOOTSTRAP_TABLES_workflow } from './modules/bootstrap_tables' addParams(
-    signature_prefix: signature_prefix
-)
-include { FINAL_BOOTSTRAP_TABLES_workflow } from './modules/bootstrap_tables' addParams(
-    signature_prefix: signature_prefix
-)
-include { OPTIMAL_PENALTIES_workflow } from './modules/optimal_penalties' addParams(
-    signature_prefix: signature_prefix
-)
-include { OPTIMISATION_PLOTS_workflow } from './modules/optimisation_plots' addParams(
-    signature_prefix: signature_prefix
-)
+include { convert_data_workflow } from './modules/data_conversion'
+include { NNLS_unoptimized_workflow as UnoptimizedNNLS } from './modules/nnls'
+include { NNLS_optimized_workflow as OptimizedNNLS } from './modules/nnls'
+include { NNLS_bootstrap_workflow as OptimizedNNLSforBootstrap } from './modules/nnls'
+include { FINAL_NNLS_workflow } from './modules/nnls'
+include { FINAL_NNLS_BOOTSTRAP_workflow } from './modules/nnls'
+include { simulate_data_workflow } from './modules/simulations'
+include { BOOTSTRAP_TABLES_workflow } from './modules/bootstrap_tables'
+include { FINAL_BOOTSTRAP_TABLES_workflow } from './modules/bootstrap_tables'
+include { OPTIMAL_PENALTIES_workflow } from './modules/optimal_penalties'
+include { OPTIMISATION_PLOTS_workflow } from './modules/optimisation_plots'
 
 // Main workflow
 workflow {

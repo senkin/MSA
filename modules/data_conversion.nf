@@ -35,6 +35,8 @@ workflow convert_data_workflow {
         def mutation_types_arg = "-t ${mutation_types_list.join(' ')}"
         def signature_tables_arg = "-s ${params.signature_tables}"
         def temp_output_arg = "-o ./"  // Output to process work directory first, then publishDir handles the move
+        def COSMIC_arg = (params.COSMIC_flag) ? "--COSMIC" : ""
+        def signature_prefix_arg = "${params.signature_prefix}_conv"
         
         if (convert_type == 'matrix_generator_matrices') {
             """
@@ -49,7 +51,7 @@ workflow convert_data_workflow {
         } else if (convert_type == 'signature_tables') {
             """
             ${base_cmd} -S ${mutation_types_arg} \\
-                -n ${params.signature_prefix} ${params.COSMIC_flag} \\
+                -n ${signature_prefix_arg} ${COSMIC_arg} \\
                 -i ${input_path} ${signature_tables_arg} ${temp_output_arg}
             """
         } else if (convert_type == 'specific_mutation_files') {
@@ -62,7 +64,7 @@ workflow convert_data_workflow {
             // Handle specific signature files - input_path should be a list of files
             """
             ${base_cmd} -S ${mutation_types_arg} \\
-                -n ${params.signature_prefix} ${params.COSMIC_flag} \\
+                -n ${signature_prefix_arg} ${COSMIC_arg} \\
                 -I ${input_path} ${signature_tables_arg} ${temp_output_arg}
             """
         } else {

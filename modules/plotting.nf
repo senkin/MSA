@@ -4,7 +4,7 @@ def abs_flag = (params.use_absolute_attributions) ? "-a" : ''
 def strands_flag = (params.show_strands) ? "-b" : ''
 def nontranscribed_flag = (params.show_nontranscribed_region) ? "-n" : ''
 def error_flag = (params.show_poisson_errors) ? "-e" : ''
-def signature_prefix = (params.SP_extractor_output_path) ? params.signature_prefix + "_conv" : params.signature_prefix
+def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
 
 workflow plot_spectra_workflow {
     take:
@@ -41,7 +41,7 @@ workflow plot_spectra_workflow {
         } else if (plot_type == 'signatures') {
             """
             python ${workflow.projectDir}/bin/plot_mutation_spectra.py -S -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} \
-                                                        -p ${signature_prefix} -s ${params.signature_tables} \
+                                                        -p ${signature_prefix} -s ${params.temp_path}/signature_tables \
                                                         -r ${strands_flag} ${nontranscribed_flag} -o "./"
             """
         } else {
@@ -78,10 +78,9 @@ workflow BOOTSTRAP_ATTRIBUTIONS_PLOTS_workflow {
         params.plot_bootstrap_attributions
         
         script:
-        // def abs_flag = params.abs_flag ?: ""
         """
         python ${workflow.projectDir}/bin/plot_bootstrap_attributions.py -d ${dataset} -t ${mutation_type} -p ${signature_prefix} ${abs_flag} \\
-            -c ${params.SBS_context} -S ${params.signature_tables} -I ${params.temp_path}/input_tables \\
+            -c ${params.SBS_context} -S ${params.temp_path}/signature_tables -I ${params.temp_path}/input_tables \\
             -i ${params.tables_output_path} -o "./" -n ${params.number_of_bootstrapped_samples}
         """
     }

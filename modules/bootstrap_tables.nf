@@ -29,8 +29,9 @@ workflow BOOTSTRAP_TABLES_workflow {
         path "*/truth_studies/*.json", optional: true, emit: truth_studies_json
         
         script:
+        def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
         """
-        python ${workflow.projectDir}/bin/make_bootstrap_tables.py -d SIM_${dataset} -t ${mutation_type} -p ${params.signature_prefix} \\
+        python ${workflow.projectDir}/bin/make_bootstrap_tables.py -d SIM_${dataset} -t ${mutation_type} -p ${signature_prefix} \\
             --suffix ${weak_threshold}_${strong_threshold} -l ${params.confidence_level} \\
             -c ${params.SBS_context} -S ${params.temp_path}/signature_tables \\
             -T ${params.signature_attribution_thresholds.join(' ')} \\
@@ -92,6 +93,7 @@ workflow FINAL_BOOTSTRAP_TABLES_workflow {
         
         script:
         def abs_flag = (params.use_absolute_attributions) ? "-a" : ''
+        def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
         """
         mkdir -p ${params.tables_output_path}/${dataset}
         
@@ -108,7 +110,7 @@ workflow FINAL_BOOTSTRAP_TABLES_workflow {
             fi
         fi
         
-        python ${workflow.projectDir}/bin/make_bootstrap_tables.py -d ${dataset} -t ${mutation_type} -p ${params.signature_prefix} ${abs_flag} \\
+        python ${workflow.projectDir}/bin/make_bootstrap_tables.py -d ${dataset} -t ${mutation_type} -p ${signature_prefix} ${abs_flag} \\
             -c ${params.SBS_context} -S ${params.temp_path}/signature_tables -l ${params.confidence_level} \\
             -T ${params.signature_attribution_thresholds.join(' ')} \\
             -i ${params.tables_output_path} -o "./" -n ${num_bootstrap_samples}
