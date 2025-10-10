@@ -1,11 +1,6 @@
 // modules/simulations.nf
 
 // parameters for helper flags
-// params.number_of_simulated_samples = -1
-// params.noise_type = "gaussian"
-// params.noise_stdev = 10
-// params.zero_inflation_threshold = 0.05
-// params.SBS_context = 96
 def noise_flag = params.add_noise ? "-z" : ""
 def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
 

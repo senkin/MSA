@@ -1,6 +1,6 @@
 // modules/bootstrap_tables.nf
 
-// def signature_prefix = (params.SP_extractor_output_path) ? params.signature_prefix + "_conv" : params.signature_prefix
+def suffix = (params.use_absolute_attributions) ? "abs_mutations" : 'weights'
 
 workflow BOOTSTRAP_TABLES_workflow {
     take:
@@ -67,7 +67,6 @@ workflow FINAL_BOOTSTRAP_TABLES_workflow {
     attribution_for_tables  // tuple of (dataset, mutation_type) from final NNLS
     bootstrap_outputs       // bootstrap outputs from final bootstrap NNLS
     num_bootstrap_samples   // number of bootstrap samples
-    suffix                  // suffix for output files (e.g., "_abs_mutations" or "_weights")
     
     main:
     // Process to make final bootstrap tables
@@ -79,7 +78,6 @@ workflow FINAL_BOOTSTRAP_TABLES_workflow {
         tuple val(dataset), val(mutation_type)
         val bootstrap_outputs_ready
         val num_bootstrap_samples
-        val suffix
         
         output:
         path "./${dataset}/CIs_${dataset}_${mutation_type}_bootstrap_output_${suffix}.csv", emit: confidence_intervals
@@ -127,7 +125,6 @@ workflow FINAL_BOOTSTRAP_TABLES_workflow {
         attribution_for_tables,
         bootstrap_ready_signal,
         num_bootstrap_samples,
-        suffix
     )
     
     emit:

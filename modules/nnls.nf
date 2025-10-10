@@ -1,7 +1,5 @@
 // modules/nnls.nf
 
-
-
 // Unoptimized NNLS workflow
 workflow NNLS_unoptimized_workflow {
     take:

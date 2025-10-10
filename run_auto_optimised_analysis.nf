@@ -79,17 +79,6 @@ params.show_nontranscribed_region = false // only wortks with higher contexts (2
 // if SIM in dataset name (synthetic data), use the following percentage range for measuring signature attirbution sensitivities
 params.signature_attribution_thresholds = 0..20
 
-// helper flags for scripts (automatic based on parameters)
-suffix = (params.use_absolute_attributions) ? "abs_mutations" : 'weights'
-// override number of samples/variations for test run
-test_run = (params.dataset == 'SIM_test') ? true : false
-number_of_bootstrapped_samples_in_optimisation = (test_run) ? 10 : params.number_of_bootstrapped_samples_in_optimisation
-number_of_bootstrapped_samples = (test_run) ? 10 : params.number_of_bootstrapped_samples
-number_of_simulated_samples = (test_run) ? 10 : params.number_of_simulated_samples
-weak_thresholds = (test_run) ? [0, 0.01, 0.02] : params.weak_thresholds
-strong_thresholds = (test_run) ? [0] : params.strong_thresholds
-// signature_prefix = (test_run) ? "sigTest" : signature_prefix
-
 params.help = null
 
 log.info ''
@@ -158,9 +147,7 @@ log.info "help:                               ${params.help}"
 log.info params.collect { k,v -> "${k.padRight(34)}: $v" }.join("\n")
 
 // Normalize mutation_types to always be a list (handle command-line string input)
-if (test_run) {
-    mutation_types = ['ID']//['SBS', 'DBS', 'ID']
-} else if (params.mutation_types instanceof String) {
+if (params.mutation_types instanceof String) {
     mutation_types = [params.mutation_types]
 } else {
     mutation_types = params.mutation_types
@@ -310,8 +297,8 @@ workflow {
         def optimized_outputs = []
         def bootstrap_outputs = []
         // Run optimized NNLS for each threshold combination
-        for (weak_threshold in weak_thresholds) {
-            for (strong_threshold in strong_thresholds) {
+        for (weak_threshold in params.weak_thresholds) {
+            for (strong_threshold in params.strong_thresholds) {
                 // Standard optimized NNLS
                 OptimizedNNLS(
                     params.dataset,
@@ -331,7 +318,7 @@ workflow {
                     signature_files_channel,
                     weak_threshold,
                     strong_threshold,
-                    number_of_bootstrapped_samples_in_optimisation
+                    params.number_of_bootstrapped_samples_in_optimisation
                 )
                 bootstrap_outputs.add(OptimizedNNLSforBootstrap.out.bootstrap_indices)
             }
@@ -346,24 +333,24 @@ workflow {
         BOOTSTRAP_TABLES_workflow(
             UnoptimizedNNLS.out.dataset_mutation_pairs,
             all_optimized.mix(all_bootstrap).collect(),
-            weak_thresholds,
-            strong_thresholds,
-            number_of_bootstrapped_samples_in_optimisation
+            params.weak_thresholds,
+            params.strong_thresholds,
+            params.number_of_bootstrapped_samples_in_optimisation
         )
         
         // Calculate optimal penalties
         OPTIMAL_PENALTIES_workflow(
             BOOTSTRAP_TABLES_workflow.out.bootstrap_tables,
             UnoptimizedNNLS.out.dataset_mutation_pairs,
-            weak_thresholds,
-            strong_thresholds
+            params.weak_thresholds,
+            params.strong_thresholds
         )
         
         // Generate optimization plots
         OPTIMISATION_PLOTS_workflow(
             OPTIMAL_PENALTIES_workflow.out.penalties_for_optimisation_plotting,
-            weak_thresholds,
-            strong_thresholds
+            params.weak_thresholds,
+            params.strong_thresholds
         )
         
         // Run final NNLS with optimal penalties
@@ -382,15 +369,14 @@ workflow {
             OPTIMAL_PENALTIES_workflow.out.optimal_strong_penalty,
             input_files_channel,
             signature_files_channel,
-            number_of_bootstrapped_samples
+            params.number_of_bootstrapped_samples
         )
 
         // Generate final bootstrap tables after final bootstrap NNLS completes
         FINAL_BOOTSTRAP_TABLES_workflow(
             FINAL_NNLS_workflow.out.dataset_mutation_pairs,
             FINAL_NNLS_BOOTSTRAP_workflow.out.bootstrap_indices,
-            number_of_bootstrapped_samples,
-            suffix
+            params.number_of_bootstrapped_samples
         )
 
         // Generate final plots

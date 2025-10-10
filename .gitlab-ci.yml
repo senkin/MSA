@@ -13,4 +13,4 @@ test_nextflow:
     - apt-get -y install curl
     - curl -s https://get.nextflow.io | bash
   script:
-    - ./nextflow run run_auto_optimised_analysis.nf -profile conda
+    - ./nextflow run run_auto_optimised_analysis.nf -profile conda,test
