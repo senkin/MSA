@@ -41,7 +41,7 @@ workflow plot_spectra_workflow {
         } else if (plot_type == 'signatures') {
             """
             python ${workflow.projectDir}/bin/plot_mutation_spectra.py -S -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} \
-                                                        -p ${signature_prefix} -s ${params.temp_path}/signature_tables \
+                                                        -p ${signature_prefix} -s ${inputs} \
                                                         -r ${strands_flag} ${nontranscribed_flag} -o "./"
             """
         } else {
@@ -170,9 +170,6 @@ workflow FITTED_SPECTRA_PLOTS_workflow {
         params.plot_fitted_spectra
         
         script:
-        // def error_flag = (params.show_poisson_errors) ? "-e" : ''
-        // def strands_flag = params.strands_flag ?: ""
-        // def nontranscribed_flag = params.nontranscribed_flag ?: ""
         """
         python ${workflow.projectDir}/bin/plot_mutation_spectra.py -f -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
             -i ${params.tables_output_path} ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
@@ -217,9 +214,6 @@ workflow RESIDUALS_PLOTS_workflow {
         params.plot_residuals
         
         script:
-        // def error_flag = params.error_flag ?: ""
-        // def strands_flag = params.strands_flag ?: ""
-        // def nontranscribed_flag = params.nontranscribed_flag ?: ""
         """
         python ${workflow.projectDir}/bin/plot_mutation_spectra.py -H -R -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
             -i ${params.tables_output_path} ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
