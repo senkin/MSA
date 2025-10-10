@@ -582,8 +582,6 @@ if __name__ == '__main__':
     num_ref_sigs = signatures.shape[1]
 
     sel_sig_nums=list(range(0,num_ref_sigs))
-    # sel_sig_nums=[0,4,26,44]
-    # sel_sig_nums=range(0,44)+range(46,65)  # all 65 signatures except SBS40
 
     signature_columns_list = signatures.columns[sel_sig_nums].tolist()
     print("Analysing signatures:", signature_columns_list)

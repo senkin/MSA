@@ -33,6 +33,7 @@ workflow OPTIMAL_PENALTIES_workflow {
         def no_CI_for_penalties_flag = params.no_CI_for_penalties ? "--no_CI" : ""
         def calculate_penalty_on_average_flag = params.calculate_penalty_on_average ? "--average" : ""
         def prioritised_signatures_flag = params.signatures_to_prioritise ? "--signatures_to_prioritise " + params.signatures_to_prioritise.join(' ') : ''
+        def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
         
         """
         python ${workflow.projectDir}/bin/calculate_optimal_penalties.py -d SIM_${dataset} -t ${mutation_type} \\
@@ -47,7 +48,7 @@ workflow OPTIMAL_PENALTIES_workflow {
             -W ${weak_thresholds_list.join(' ')} \\
             -S ${strong_thresholds_list.join(' ')} \\
             --signature_path ${params.temp_path}/signature_tables \\
-            -p ${params.signature_prefix}
+            -p ${signature_prefix}
         """
     }
     

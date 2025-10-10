@@ -1,7 +1,5 @@
 // modules/optimization_plots.nf
 
-// def signature_prefix = (params.SP_extractor_output_path) ? params.signature_prefix + "_conv" : params.signature_prefix
-
 workflow OPTIMISATION_PLOTS_workflow {
     take:
     penalties_for_plotting  // tuple of (dataset, mutation_type) from optimal penalties
@@ -28,6 +26,7 @@ workflow OPTIMISATION_PLOTS_workflow {
         params.plot_optimisation_plots
         
         script:
+        def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
         """
         python ${workflow.projectDir}/bin/plot_metric_heatmaps.py -d SIM_${dataset} -t ${mutation_type} \\
             -i ${params.optimisation_NNLS_output_path} -o "./" \\
@@ -37,7 +36,7 @@ workflow OPTIMISATION_PLOTS_workflow {
             -S ${strong_thresholds_list.join(' ')} \\
             -T ${params.signature_attribution_thresholds.join(' ')} \\
             --signature_path ${params.temp_path}/signature_tables \\
-            -p ${params.signature_prefix}
+            -p ${signature_prefix}
         """
     }
     

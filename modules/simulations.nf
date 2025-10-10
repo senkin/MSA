@@ -1,13 +1,8 @@
 // modules/simulations.nf
 
 // parameters for helper flags
-// params.number_of_simulated_samples = -1
-// params.noise_type = "gaussian"
-// params.noise_stdev = 10
-// params.zero_inflation_threshold = 0.05
-// params.SBS_context = 96
 def noise_flag = params.add_noise ? "-z" : ""
-// def signature_prefix = (params.SP_extractor_output_path) ? params.signature_prefix + "_conv" : params.signature_prefix
+def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
 
 workflow simulate_data_workflow {
     take:
@@ -37,7 +32,7 @@ workflow simulate_data_workflow {
             -t ${mutation_type} \
             -c ${params.SBS_context} \
             -n ${params.number_of_simulated_samples} \
-            -p ${params.signature_prefix} \
+            -p ${signature_prefix} \
             -B ${noise_flag} \
             --noise_type ${params.noise_type} \
             -Z ${params.noise_stdev} \

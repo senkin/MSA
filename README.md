@@ -12,13 +12,13 @@ The best way to run the code is by using [Nextflow](https://www.nextflow.io/).
 Once you have installed Nextflow, run the test job locally or on your favourite cluster:
 
 ```bash
-nextflow run https://gitlab.com/s.senkin/MSA -profile conda
+nextflow run https://gitlab.com/s.senkin/MSA -profile conda,test
 ```
 
 **Important**: The pipeline has been updated to Nextflow DSL2 and requires Nextflow version 21.04.0 or later. The version can be changed using the following command:
 
 ```bash
-export NXF_VER=23.10.0
+export NXF_VER=25.04.8
 ```
 
 It is recommended to use [docker](https://www.docker.com/) or [singularity](https://sylabs.io/singularity/) profiles as these normally provide greater stability and reproducibility than [conda](https://conda.io).
@@ -123,8 +123,7 @@ cd MSA
 
 Run the fully automated pipeline with optimisation on the test dataset:
 ```bash
-nextflow run run_auto_optimised_analysis.nf -profile conda \
-    --dataset SIM_test \
+nextflow run run_auto_optimised_analysis.nf -profile conda,test \
     --output_path test
 ```
 
