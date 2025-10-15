@@ -1,403 +1,616 @@
 """ make_bootstrap_tables.py
-Module make the bootstrap tables as well as calculate various metrics and scores in case of simulated data
+Module to make bootstrap tables and calculate metrics/scores for simulated data.
+Refactored for improved efficiency and readability.
 """
 
 from argparse import ArgumentParser
-import copy
 import numpy as np
 import pandas as pd
 from datetime import datetime
-from common_methods import make_folder_if_not_exists, write_data_to_JSON, calculate_confidence_interval, calculate_stat_scores, calculate_sensitivity_CI, calculate_specificity_CI
+from pathlib import Path
+from common_methods import (
+    make_folder_if_not_exists, 
+    write_data_to_JSON, 
+    calculate_confidence_interval,
+    calculate_stat_scores, 
+    calculate_sensitivity_CI, 
+    calculate_specificity_CI
+)
 
-def calculate_sensitivity_thresholds(signatures_CPs_dict, signatures_to_consider, signature_attribution_thresholds):
-    global confidence_level
-    sensitivity_thresholds = pd.DataFrame(columns=signatures_to_consider, dtype=float)
-    for signature in signatures_to_consider:
-        lowest_threshold_scanned = signature_attribution_thresholds[0]
-        highest_threshold_scanned = signature_attribution_thresholds[-1]
-        if signatures_CPs_dict[lowest_threshold_scanned].loc[0, signature] >= confidence_level:
-            sensitivity_thresholds.loc[0, signature] = lowest_threshold_scanned
-            continue
-        elif signatures_CPs_dict[highest_threshold_scanned].loc[0, signature] < confidence_level:
-            sensitivity_thresholds.loc[0, signature] = np.nan
-            continue
+
+def load_signature_table(signature_tables_path, signatures_prefix, mutation_type, context):
+    """Load appropriate signature table based on mutation type and context."""
+    if mutation_type == 'SBS':
+        if context == 96:
+            return pd.read_csv(
+                f'{signature_tables_path}/{signatures_prefix}_{mutation_type}_signatures.csv',
+                index_col=[0, 1]
+            )
+        elif context in [192, 288]:
+            return pd.read_csv(
+                f'{signature_tables_path}/{signatures_prefix}_{mutation_type}_{context}_signatures.csv',
+                index_col=[0, 1, 2]
+            )
+        elif context in [1536, 4608]:
+            return pd.read_csv(
+                f'{signature_tables_path}/{signatures_prefix}_{mutation_type}_{context}_signatures.csv',
+                index_col=0
+            )
         else:
-            for threshold_id, threshold in enumerate(signature_attribution_thresholds):
-                if threshold_id != len(signature_attribution_thresholds)-1:
-                    next_threshold = signature_attribution_thresholds[threshold_id+1]
-                else:
-                    next_threshold = threshold
+            raise ValueError(f"Context {context} is not supported.")
+    else:
+        return pd.read_csv(
+            f'{signature_tables_path}/{signatures_prefix}_{mutation_type}_signatures.csv',
+            index_col=0
+        )
+
+
+def load_truth_table(input_folder, dataset_name, mutation_type, context):
+    """Load truth attribution table for simulated datasets."""
+    if mutation_type == 'SBS':
+        filename = f'WGS_{dataset_name}.{context}.weights.csv'
+    elif mutation_type == 'DBS':
+        filename = f'WGS_{dataset_name}.dinucs.weights.csv'
+    elif mutation_type == 'ID':
+        filename = f'WGS_{dataset_name}.indels.weights.csv'
+    else:  # SV and CNV
+        filename = f'WGS_{dataset_name}.{mutation_type}.weights.csv'
+    
+    return pd.read_csv(f'{input_folder}/{filename}', index_col=0)
+
+
+def calculate_sensitivity_thresholds(signatures_CPs_dict, signatures_to_consider, 
+                                     signature_attribution_thresholds, confidence_level):
+    """Calculate sensitivity thresholds for each signature."""
+    sensitivity_thresholds = pd.DataFrame(columns=signatures_to_consider, dtype=float)
+    
+    lowest_threshold = signature_attribution_thresholds[0]
+    highest_threshold = signature_attribution_thresholds[-1]
+    
+    for signature in signatures_to_consider:
+        lowest_CP = signatures_CPs_dict[lowest_threshold].loc[0, signature]
+        highest_CP = signatures_CPs_dict[highest_threshold].loc[0, signature]
+        
+        if lowest_CP >= confidence_level:
+            sensitivity_thresholds.loc[0, signature] = lowest_threshold
+        elif highest_CP < confidence_level:
+            sensitivity_thresholds.loc[0, signature] = np.nan
+        else:
+            # Interpolate to find threshold
+            for threshold_id, threshold in enumerate(signature_attribution_thresholds[:-1]):
+                next_threshold = signature_attribution_thresholds[threshold_id + 1]
                 lower_CP = signatures_CPs_dict[threshold].loc[0, signature]
                 higher_CP = signatures_CPs_dict[next_threshold].loc[0, signature]
-                if lower_CP < confidence_level and higher_CP >= confidence_level:
-                    sensitivity_thresholds.loc[0, signature] = threshold + (confidence_level-lower_CP)*(next_threshold-threshold)/(higher_CP-lower_CP)
-                    continue
-                elif lower_CP==confidence_level and higher_CP==confidence_level:
-                    sensitivity_thresholds.loc[0, signature] = threshold
-                    continue
+                
+                if lower_CP < confidence_level <= higher_CP:
+                    if higher_CP == lower_CP:
+                        sensitivity_thresholds.loc[0, signature] = threshold
+                    else:
+                        # Linear interpolation
+                        interpolated = threshold + (confidence_level - lower_CP) * \
+                                     (next_threshold - threshold) / (higher_CP - lower_CP)
+                        sensitivity_thresholds.loc[0, signature] = interpolated
+                    break
+    
     return sensitivity_thresholds
 
-if __name__ == '__main__':
+
+def process_bootstrap_samples(number_of_b_samples, bootstrap_files, samples, 
+                              signatures_to_consider, stat_metrics):
+    """
+    Process all bootstrap samples efficiently using vectorized operations where possible.
+    Returns dictionaries of dataframes with bootstrap values.
+    """
+    # Pre-allocate arrays for better performance
+    n_samples = len(samples)
+    n_signatures = len(signatures_to_consider)
+    n_metrics = len(stat_metrics)
+    
+    # Initialize dictionaries with pre-allocated DataFrames
+    attributions_per_sample = {
+        sample: pd.DataFrame(
+            index=range(number_of_b_samples), 
+            columns=signatures_to_consider, 
+            dtype=float
+        ) for sample in samples
+    }
+    
+    attributions_per_signature = {
+        sig: pd.DataFrame(
+            index=range(number_of_b_samples), 
+            columns=samples, 
+            dtype=float
+        ) for sig in signatures_to_consider
+    }
+    
+    stat_metrics_dict = {
+        metric: pd.DataFrame(
+            index=range(number_of_b_samples), 
+            columns=samples, 
+            dtype=float
+        ) for metric in stat_metrics
+    }
+    
+    # Process each bootstrap sample
+    for i in range(number_of_b_samples):
+        bootstrap_attr = pd.read_csv(bootstrap_files['weights'](i+1), index_col=0)
+        stat_table = pd.read_csv(bootstrap_files['stat'](i+1), index_col=0)
+        
+        # Vectorized assignment - much faster than nested loops
+        for sample in samples:
+            attributions_per_sample[sample].loc[i] = bootstrap_attr.loc[sample]
+        
+        for signature in signatures_to_consider:
+            attributions_per_signature[signature].loc[i] = bootstrap_attr[signature]
+        
+        for metric in stat_metrics:
+            stat_metrics_dict[metric].loc[i] = stat_table[metric]
+    
+    return attributions_per_sample, attributions_per_signature, stat_metrics_dict
+
+
+def calculate_confidence_intervals_vectorized(attributions_per_sample, central_attribution,
+                                              samples, signatures, confidence_level):
+    """Calculate confidence intervals for all samples and signatures."""
+    confidence_intervals = pd.DataFrame(index=samples, columns=signatures, dtype=object)
+    
+    for sample in samples:
+        for signature in signatures:
+            ci = calculate_confidence_interval(
+                attributions_per_sample[sample][signature], 
+                confidence=confidence_level * 100
+            )
+            central_value = central_attribution.loc[sample, signature]
+            confidence_intervals.loc[sample, signature] = [central_value, ci]
+    
+    return confidence_intervals
+
+
+def calculate_signature_CPs(confidence_intervals, truth_attribution_table, samples, 
+                           signatures_to_consider, acting_signatures):
+    """Calculate signature confidence probabilities."""
+    signatures_CPs = pd.DataFrame(index=samples, columns=signatures_to_consider, dtype=float)
+    
+    for sample in samples:
+        for signature in signatures_to_consider:
+            # Add signature to truth table if not present
+            if signature not in truth_attribution_table.columns:
+                truth_attribution_table[signature] = 0
+            
+            lower, upper = confidence_intervals.loc[sample, signature][1]
+            truth_value = truth_attribution_table.loc[sample, signature]
+            
+            if signature in acting_signatures:
+                signatures_CPs.loc[sample, signature] = int(lower <= truth_value <= upper)
+            else:
+                signatures_CPs.loc[sample, 'Others'] = int(lower <= truth_value <= upper)
+    
+    # Calculate overall CPs
+    return signatures_CPs.sum(axis=0).to_frame().T / len(samples)
+
+
+def calculate_CPs_for_thresholds(confidence_intervals, truth_attribution_table, samples,
+                                 signatures_to_consider, thresholds):
+    """Calculate CPs for different sensitivity thresholds."""
+    signatures_CPs_dict = {}
+    
+    for threshold in thresholds:
+        CPs = pd.DataFrame(index=samples, columns=signatures_to_consider, dtype=float)
+        
+        for sample in samples:
+            for signature in signatures_to_consider:
+                lower, upper = confidence_intervals.loc[sample, signature][1]
+                truth_value = truth_attribution_table.loc[sample, signature]
+                
+                # Adjust upper bound if needed
+                if lower == 0 and upper < threshold:
+                    upper = threshold
+                
+                # Check if CI contains truth or both are positive
+                if lower <= truth_value <= upper:
+                    CPs.loc[sample, signature] = 1
+                elif lower > 0 and upper > 0 and truth_value > 0:
+                    CPs.loc[sample, signature] = 1
+                else:
+                    CPs.loc[sample, signature] = 0
+        
+        # Normalize to get probabilities
+        signatures_CPs_dict[threshold] = CPs.sum(axis=0).to_frame().T / len(samples)
+    
+    return signatures_CPs_dict
+
+
+def main():
     start_time = datetime.now()
     parser = ArgumentParser()
-    parser.add_argument("-i", "--input_attributions_folder", dest="input_attributions_folder", default='output_tables/',
-                        help="set path to NNLS output data")
-    parser.add_argument("-S", "--signature_path", dest="signature_tables_path", default='signature_tables/',
-                        help="set path to signature tables")
-    parser.add_argument("-p", "--signature_prefix", dest="signatures_prefix", default='sigProfiler',
-                        help="set prefix in signature filenames (sigProfiler by default)")
-    parser.add_argument("-d", "--dataset", dest="dataset_name", default='SIM',
-                        help="set the dataset name (e.g. SIM)")
-    parser.add_argument("-o", "--output_folder", dest="output_folder", default='output_tables/',
-                        help="set path to save plots")
-    parser.add_argument("-t", "--mutation_type", dest="mutation_type", default='',
-                        help="set mutation type (SBS, DBS, ID, SV, CNV)")
-    parser.add_argument("-c", "--context", dest="context", default=192, type=int,
-                        help="set SBS context (96, 192, 288, 1536, 4608)")
-    parser.add_argument("-l", "--confidence_level", dest="confidence_level", default=0.95, type=float,
-                        help="specify the confidence level for CI calculation (default: 0.95)")
-    parser.add_argument("-a", "--use_absolute_numbers", dest="abs_numbers", action="store_true",
-                        help="consider absolute numbers of mutations (relative by default)")
-    parser.add_argument("-v", "--verbose", dest="verbose", action="store_true",
-                        help="print additional information for debugging")
-    parser.add_argument("-n", "--number_of_b_samples", dest="number_of_b_samples", default=1000, type=int,
-                        help="Number of bootstrapped samples (1000 by default)")
-    parser.add_argument("-N", "--number_of_samples", dest="number_of_samples", default=-1, type=int,
-                        help="limit the number of samples to analyse (all by default)")
-    parser.add_argument("-T", "--signature_attribution_thresholds", nargs='+', dest="signature_attribution_thresholds",
-                        help="set the list of signature attribution thresholds for confidence probability plots (truth study)")
-    parser.add_argument("--suffix", dest="suffix", default='',
-                        help="add suffixes to inputs (useful during optimisation scan analysis)")
+    parser.add_argument("-i", "--input_attributions_folder", dest="input_attributions_folder", 
+                       default='output_tables/')
+    parser.add_argument("-S", "--signature_path", dest="signature_tables_path", 
+                       default='signature_tables/')
+    parser.add_argument("-p", "--signature_prefix", dest="signatures_prefix", 
+                       default='sigProfiler')
+    parser.add_argument("-d", "--dataset", dest="dataset_name", default='SIM')
+    parser.add_argument("-o", "--output_folder", dest="output_folder", 
+                       default='output_tables/')
+    parser.add_argument("-t", "--mutation_type", dest="mutation_type", default='')
+    parser.add_argument("-c", "--context", dest="context", default=192, type=int)
+    parser.add_argument("-l", "--confidence_level", dest="confidence_level", 
+                       default=0.95, type=float)
+    parser.add_argument("-a", "--use_absolute_numbers", dest="abs_numbers", 
+                       action="store_true")
+    parser.add_argument("-v", "--verbose", dest="verbose", action="store_true")
+    parser.add_argument("-n", "--number_of_b_samples", dest="number_of_b_samples", 
+                       default=1000, type=int)
+    parser.add_argument("-N", "--number_of_samples", dest="number_of_samples", 
+                       default=-1, type=int)
+    parser.add_argument("-T", "--signature_attribution_thresholds", nargs='+', 
+                       dest="signature_attribution_thresholds")
+    parser.add_argument("--suffix", dest="suffix", default='')
 
     args = parser.parse_args()
 
-    dataset_name = args.dataset_name
-    mutation_type = args.mutation_type
-    context = args.context
-    confidence_level = args.confidence_level
-    number_of_b_samples = args.number_of_b_samples
-    signature_tables_path = args.signature_tables_path
-    signatures_prefix = args.signatures_prefix
+    # Validate mutation type
+    if not args.mutation_type:
+        parser.error("Please specify mutation type using -t option (SBS, DBS, ID, SV, CNV).")
+    if args.mutation_type not in ['SBS', 'DBS', 'ID', 'SV', 'CNV']:
+        raise ValueError(f"Unknown mutation type: {args.mutation_type}")
+
+    # Set up paths
     if not args.suffix:
-        input_attributions_folder = args.input_attributions_folder + '/' + dataset_name + '/'
-        output_folder = args.output_folder + '/' + dataset_name
+        input_folder = f'{args.input_attributions_folder}/{args.dataset_name}/'
+        output_folder = f'{args.output_folder}/{args.dataset_name}'
     else:
-        input_attributions_folder = args.input_attributions_folder + '/' + dataset_name + '_' + str(context) + '_NNLS_' + args.suffix + '/'
-        output_folder = args.output_folder + '/' + dataset_name + '_' + str(context) + '_NNLS_' + args.suffix + '/'
+        base_name = f'{args.dataset_name}_{args.context}_NNLS_{args.suffix}'
+        input_folder = f'{args.input_attributions_folder}/{base_name}/'
+        output_folder = f'{args.output_folder}/{base_name}/'
+    
     make_folder_if_not_exists(output_folder)
-    if 'SIM' in dataset_name:
-        make_folder_if_not_exists(output_folder + '/truth_studies')
+    is_simulated = 'SIM' in args.dataset_name
+    if is_simulated:
+        make_folder_if_not_exists(f'{output_folder}/truth_studies')
 
-    if not mutation_type:
-        parser.error("Please specify the mutation type using -t option, e.g. add '-t SBS' to the command (DBS, ID).")
-    elif mutation_type not in ['SBS', 'DBS', 'ID', 'SV', 'CNV']:
-        raise ValueError("Unknown mutation type: %s. Known types: SBS, DBS, ID, SV, CNV" % mutation_type)
+    print("*" * 50)
+    print(f"Processing {args.mutation_type} mutation type, {args.dataset_name} dataset")
 
-    print("*"*50)
-    print("Making tables for %s mutation type, %s dataset" % (mutation_type, dataset_name))
+    # Load central attribution tables
+    central_attr_abs = pd.read_csv(
+        f'{input_folder}/output_{args.dataset_name}_{args.mutation_type}_mutations_table.csv',
+        index_col=0
+    )
+    central_attr_weights = pd.read_csv(
+        f'{input_folder}/output_{args.dataset_name}_{args.mutation_type}_weights_table.csv',
+        index_col=0
+    )
+    central_stat_table = pd.read_csv(
+        f'{input_folder}/output_{args.dataset_name}_{args.mutation_type}_stat_info.csv',
+        index_col=0
+    )
 
-    central_attribution_table_abs = pd.read_csv(input_attributions_folder + '/output_%s_%s_mutations_table.csv' % (dataset_name, mutation_type), index_col=0)
-    central_attribution_table_weights = pd.read_csv(input_attributions_folder + '/output_%s_%s_weights_table.csv' % (dataset_name, mutation_type), index_col=0)
-    central_stat_table = pd.read_csv(input_attributions_folder + '/output_%s_%s_stat_info.csv' % (dataset_name, mutation_type), index_col=0)
-    bootstrap_attribution_table_abs_filename = input_attributions_folder + '/bootstrap_output/output_%s_%s_i_mutations_table.csv' % (dataset_name, mutation_type)
-    bootstrap_attribution_table_weights_filename = input_attributions_folder + '/bootstrap_output/output_%s_%s_i_weights_table.csv' % (dataset_name, mutation_type)
-    bootstrap_stat_table_filename = input_attributions_folder + '/bootstrap_output/output_%s_%s_i_stat_info.csv' % (dataset_name, mutation_type)
-    if args.suffix:
-        bootstrap_attribution_table_abs_filename = input_attributions_folder + '/bootstrap_output/output_%s_%s_%s_i_mutations_table.csv' % (dataset_name, mutation_type, args.suffix)
-        bootstrap_attribution_table_weights_filename = input_attributions_folder + '/bootstrap_output/output_%s_%s_%s_i_weights_table.csv' % (dataset_name, mutation_type, args.suffix)
-        bootstrap_stat_table_filename = input_attributions_folder + '/bootstrap_output/output_%s_%s_%s_i_stat_info.csv' % (dataset_name, mutation_type, args.suffix)
+    # Determine bootstrap file patterns
+    bootstrap_files = {
+        'abs': lambda i: f'{input_folder}/bootstrap_output/output_{args.dataset_name}_{args.mutation_type}{"_" + args.suffix if args.suffix else ""}_{i}_mutations_table.csv',
+        'weights': lambda i: f'{input_folder}/bootstrap_output/output_{args.dataset_name}_{args.mutation_type}{"_" + args.suffix if args.suffix else ""}_{i}_weights_table.csv',
+        'stat': lambda i: f'{input_folder}/bootstrap_output/output_{args.dataset_name}_{args.mutation_type}{"_" + args.suffix if args.suffix else ""}_{i}_stat_info.csv'
+    }
 
-    if mutation_type == 'SBS':
-        if context == 96:
-            signatures = pd.read_csv('%s/%s_%s_signatures.csv' % (signature_tables_path, signatures_prefix, mutation_type), index_col=[0, 1])
-        elif context in [192, 288]:
-            signatures = pd.read_csv('%s/%s_%s_%i_signatures.csv' % (signature_tables_path, signatures_prefix, mutation_type, context), index_col=[0, 1, 2])
-        elif context in [1536, 4608]:
-            signatures = pd.read_csv('%s/%s_%s_%i_signatures.csv' % (signature_tables_path, signatures_prefix, mutation_type, context), index_col=0)
-        else:
-            raise ValueError("Context %i is not supported." % context)
-    else:
-        signatures = pd.read_csv('%s/%s_%s_signatures.csv' % (signature_tables_path, signatures_prefix, mutation_type), index_col=0)
+    # Load signatures
+    signatures = load_signature_table(
+        args.signature_tables_path, 
+        args.signatures_prefix, 
+        args.mutation_type, 
+        args.context
+    )
 
-    if 'SIM' in dataset_name:
-        if mutation_type == 'SBS':
-            truth_attribution_table = pd.read_csv(input_attributions_folder + '/WGS_%s.%i.weights.csv' % (dataset_name, context), index_col=0)
-        elif mutation_type == 'DBS':
-            truth_attribution_table = pd.read_csv(input_attributions_folder + '/WGS_%s.dinucs.weights.csv' % dataset_name, index_col=0)
-        elif mutation_type == 'ID':
-            truth_attribution_table = pd.read_csv(input_attributions_folder + '/WGS_%s.indels.weights.csv' % dataset_name, index_col=0)
-        else: # SV and CNV
-            truth_attribution_table = pd.read_csv(input_attributions_folder + '/WGS_%s.%s.weights.csv' % (dataset_name, mutation_type), index_col=0)
+    # Load truth table for simulated data
+    truth_attribution_table = None
+    if is_simulated:
+        truth_attribution_table = load_truth_table(
+            input_folder, 
+            args.dataset_name, 
+            args.mutation_type, 
+            args.context
+        )
 
-    if args.abs_numbers:
-        central_attribution_table = central_attribution_table_abs
-        bootstrap_attribution_table_filename = bootstrap_attribution_table_abs_filename
-        filename = dataset_name + '_' + mutation_type + '_bootstrap_output_abs_mutations'
-    else:
-        central_attribution_table = central_attribution_table_weights
-        bootstrap_attribution_table_filename = bootstrap_attribution_table_weights_filename
-        filename = dataset_name + '_' + mutation_type + '_bootstrap_output_weights'
+    # Select attribution table type
+    central_attribution = central_attr_abs if args.abs_numbers else central_attr_weights
+    filename_suffix = 'abs_mutations' if args.abs_numbers else 'weights'
+    filename = f'{args.dataset_name}_{args.mutation_type}_bootstrap_output_{filename_suffix}'
 
-    # limit the number of samples to analyse (if specified by -N option)
+    # Limit samples if specified
     if args.number_of_samples != -1:
-        central_attribution_table = central_attribution_table.head(args.number_of_samples)
-        if 'SIM' in dataset_name:
+        central_attribution = central_attribution.head(args.number_of_samples)
+        if is_simulated:
             truth_attribution_table = truth_attribution_table.head(args.number_of_samples)
 
-    # # convert columns and index to str
-    # central_attribution_table.columns = central_attribution_table.columns.astype(str)
-    # central_attribution_table.index = central_attribution_table.index.astype(str)
-    # if 'SIM' in dataset_name:
-    #     truth_attribution_table.columns = truth_attribution_table.columns.astype(str)
-    #     truth_attribution_table.index = truth_attribution_table.index.astype(str)
-
-    main_title = dataset_name.replace('_', '/') + ' data, ' + mutation_type + ' mutation type'
-
-    # samples, signatures and metrics to consider
-    samples = central_attribution_table.index.to_list()
-    signatures_to_consider = list(central_attribution_table_abs.columns)
+    # Get samples and signatures
+    samples = central_attribution.index.tolist()
+    signatures_to_consider = list(central_attr_abs.columns)
     signatures = signatures[signatures_to_consider]
-    stat_metrics = central_stat_table.columns.to_list()
+    stat_metrics = central_stat_table.columns.tolist()
 
-    # initialise statistical metrics to fill with bootstrap values
-    stat_metrics_dict = {}
-    for metric in stat_metrics:
-        stat_metrics_dict[metric] = pd.DataFrame(index=range(number_of_b_samples), columns=samples, dtype=float)
+    # Find acting signatures for simulated data
+    acting_signatures = []
+    if is_simulated:
+        acting_signatures = [
+            sig for sig in truth_attribution_table.columns 
+            if truth_attribution_table[sig].max() > 0
+        ]
 
-    # initialise per-sample attribution dictionary
-    attributions_per_sample_dict = {}
+    print('Processing bootstrap samples...')
+    # Process all bootstrap samples
+    attributions_per_sample, attributions_per_signature, stat_metrics_dict = \
+        process_bootstrap_samples(
+            args.number_of_b_samples, 
+            bootstrap_files, 
+            samples,
+            signatures_to_consider, 
+            stat_metrics
+        )
+    
+    print(f'Bootstrap processing complete. Elapsed: {datetime.now() - start_time}')
+
+    # Calculate confidence intervals
+    print('Calculating confidence intervals...')
+    confidence_intervals = calculate_confidence_intervals_vectorized(
+        attributions_per_sample,
+        central_attribution,
+        samples,
+        signatures_to_consider,
+        args.confidence_level
+    )
+    
+    # Calculate pruned attributions (0 where CI includes 0)
+    pruned_attribution_table = pd.DataFrame(
+        index=samples, 
+        columns=signatures_to_consider, 
+        dtype=int
+    )
     for sample in samples:
-        attributions_per_sample_dict[sample] = pd.DataFrame(index=range(number_of_b_samples), columns=signatures_to_consider, dtype=float)
+        for signature in signatures_to_consider:
+            lower_bound = confidence_intervals.loc[sample, signature][1][0]
+            if lower_bound == 0:
+                pruned_attribution_table.loc[sample, signature] = 0
+            else:
+                pruned_attribution_table.loc[sample, signature] = \
+                    np.around(central_attr_abs.loc[sample, signature])
+    
+    print(f'Confidence intervals calculated. Elapsed: {datetime.now() - start_time}')
 
-    # initialise per-signature attribution dictionary
-    attributions_per_signature_dict = {}
-    for signature in signatures_to_consider:
-        attributions_per_signature_dict[signature] = pd.DataFrame(index=range(number_of_b_samples), columns=samples, dtype=float)
+    # Calculate signature prevalences
+    print('Calculating signature prevalences...')
+    signatures_prevalences = pd.DataFrame(
+        index=samples, 
+        columns=signatures_to_consider, 
+        dtype=float
+    )
+    for sample in samples:
+        signatures_prevalences.loc[sample] = \
+            attributions_per_sample[sample].astype(bool).sum(axis=0)
+    signatures_prevalences = signatures_prevalences / args.number_of_b_samples
+    
+    print(f'Prevalences calculated. Elapsed: {datetime.now() - start_time}')
 
-    # mutation categories from signatures table
-    categories = signatures.index.to_list()
-    # initialise mutation spectra dictionary
-    # mutation_spectra_dict = {}
-    # for sample in samples:
-    #     mutation_spectra_dict[sample] = pd.DataFrame(index=range(number_of_b_samples), columns=categories, dtype=float)
-
-    # if SIM (synthetic) dataset, determine acting signatures
-    if 'SIM' in dataset_name:
-        acting_signatures = []
-        for signature in list(truth_attribution_table.columns):
-            if truth_attribution_table[signature].max() > 0:
-                acting_signatures.append(signature)
-
-    # initialise more dataframes and dictionaries
-    signatures_prevalences = pd.DataFrame(index=central_attribution_table.index, columns=signatures_to_consider, dtype=float)
-    if 'SIM' in dataset_name:
+    # Simulated data specific calculations
+    if is_simulated:
+        print('Calculating metrics for simulated data...')
+        
+        # Extract lower CI bounds
+        lower_CI_attributions = pd.DataFrame(
+            index=samples, 
+            columns=signatures_to_consider, 
+            dtype=float
+        )
+        for sample in samples:
+            for signature in signatures_to_consider:
+                lower_CI_attributions.loc[sample, signature] = \
+                    confidence_intervals.loc[sample, signature][1][0]
+        
+        # Calculate signature CPs
+        signatures_CPs = calculate_signature_CPs(
+            confidence_intervals,
+            truth_attribution_table,
+            samples,
+            signatures_to_consider,
+            acting_signatures
+        )
+        
+        # Calculate truth-measured differences
+        truth_and_measured_difference = pd.DataFrame(
+            0, 
+            index=samples,
+            columns=['Truth - mean', 'Truth - median', 'Truth - NNLS'], 
+            dtype=float
+        )
+        for sample in samples:
+            for signature in signatures_to_consider:
+                if signature not in truth_attribution_table.columns:
+                    truth_attribution_table[signature] = 0
+                
+                array = attributions_per_sample[sample][signature]
+                truth_val = truth_attribution_table.loc[sample, signature]
+                
+                truth_and_measured_difference.loc[sample, 'Truth - mean'] += \
+                    truth_val - np.mean(array)
+                truth_and_measured_difference.loc[sample, 'Truth - median'] += \
+                    truth_val - np.median(array)
+                truth_and_measured_difference.loc[sample, 'Truth - NNLS'] += \
+                    truth_val - central_attribution.loc[sample, signature]
+        
+        # Calculate CPs for different thresholds
+        if args.signature_attribution_thresholds:
+            thresholds = [float(t) / 100 for t in args.signature_attribution_thresholds]
+            signatures_CPs_dict = calculate_CPs_for_thresholds(
+                confidence_intervals,
+                truth_attribution_table,
+                samples,
+                signatures_to_consider,
+                thresholds
+            )
+            
+            sensitivity_thresholds = calculate_sensitivity_thresholds(
+                signatures_CPs_dict,
+                signatures_to_consider,
+                thresholds,
+                args.confidence_level
+            )
+        
+        # Calculate statistical scores
         scores = ['Sensitivity', 'Specificity', 'Precision', 'Accuracy', 'F1', 'MCC']
+        
+        stat_scores_tables = pd.DataFrame(columns=scores, dtype=float)
+        stat_scores_from_CI_tables = pd.DataFrame(columns=scores, dtype=float)
+        sensitivity_CI_tables = pd.DataFrame(columns=['lower_CL', 'upper_CL'], dtype=float)
+        specificity_CI_tables = pd.DataFrame(columns=['lower_CL', 'upper_CL'], dtype=float)
+        sensitivity_CI_from_CI_tables = pd.DataFrame(columns=['lower_CL', 'upper_CL'], dtype=float)
+        specificity_CI_from_CI_tables = pd.DataFrame(columns=['lower_CL', 'upper_CL'], dtype=float)
+        
+        stat_scores_tables.loc[0] = calculate_stat_scores(
+            signatures, central_attribution, truth_attribution_table
+        )
+        stat_scores_from_CI_tables.loc[0] = calculate_stat_scores(
+            signatures, lower_CI_attributions, truth_attribution_table
+        )
+        sensitivity_CI_tables.loc[0] = calculate_sensitivity_CI(
+            signatures, central_attribution, truth_attribution_table
+        )
+        sensitivity_CI_from_CI_tables.loc[0] = calculate_sensitivity_CI(
+            signatures, lower_CI_attributions, truth_attribution_table
+        )
+        specificity_CI_tables.loc[0] = calculate_specificity_CI(
+            signatures, central_attribution, truth_attribution_table
+        )
+        specificity_CI_from_CI_tables.loc[0] = calculate_specificity_CI(
+            signatures, lower_CI_attributions, truth_attribution_table
+        )
+        
+        # Per-signature scores
         stat_scores_per_sig = {}
         stat_scores_from_CI_per_sig = {}
         sensitivity_CI_per_sig = {}
         sensitivity_CI_from_CI_per_sig = {}
         specificity_CI_per_sig = {}
         specificity_CI_from_CI_per_sig = {}
+        signatures_scores = {score: pd.DataFrame(columns=acting_signatures, dtype=float) 
+                            for score in scores}
+        signatures_scores_from_CI = {score: pd.DataFrame(columns=acting_signatures, dtype=float) 
+                                     for score in scores}
+        
         for signature in signatures_to_consider:
             stat_scores_per_sig[signature] = pd.DataFrame(columns=scores, dtype=float)
             stat_scores_from_CI_per_sig[signature] = pd.DataFrame(columns=scores, dtype=float)
-            sensitivity_CI_per_sig[signature] = pd.DataFrame(columns=['lower_CL','upper_CL'], dtype=float)
-            sensitivity_CI_from_CI_per_sig[signature] = pd.DataFrame(columns=['lower_CL','upper_CL'], dtype=float)
-            specificity_CI_per_sig[signature] = pd.DataFrame(columns=['lower_CL','upper_CL'], dtype=float)
-            specificity_CI_from_CI_per_sig[signature] = pd.DataFrame(columns=['lower_CL','upper_CL'], dtype=float)
-        stat_scores_tables = pd.DataFrame(columns=scores, dtype=float)
-        stat_scores_from_CI_tables = pd.DataFrame(columns=scores, dtype=float)
-        sensitivity_CI_tables = pd.DataFrame(columns=['lower_CL','upper_CL'], dtype=float)
-        specificity_CI_tables = pd.DataFrame(columns=['lower_CL','upper_CL'], dtype=float)
-        sensitivity_CI_from_CI_tables = pd.DataFrame(columns=['lower_CL','upper_CL'], dtype=float)
-        specificity_CI_from_CI_tables = pd.DataFrame(columns=['lower_CL','upper_CL'], dtype=float)
-        lower_CI_attributions = pd.DataFrame(index=central_attribution_table.index, columns=signatures_to_consider, dtype=float)
-        signatures_CPs = pd.DataFrame(index=central_attribution_table.index, columns=acting_signatures, dtype=float)
-        truth_and_measured_difference = pd.DataFrame(0, index=central_attribution_table.index, columns=['Truth - mean', 'Truth - median', 'Truth - NNLS'], dtype=float)
-        signatures_scores = {}
-        signatures_scores_from_CI = {}
-        for score in scores:
-            signatures_scores[score] = pd.DataFrame(columns=acting_signatures, dtype=float)
-            signatures_scores_from_CI[score] = pd.DataFrame(columns=acting_signatures, dtype=float)
-
-    print('Initialisation done.')
-    print('Elapsed time:', datetime.now() - start_time)
-
-    # fill bootstrap dataframes
-    for i in range(number_of_b_samples):
-        bootstrap_attribution_table = pd.read_csv(bootstrap_attribution_table_filename.replace('_i_', '_%i_' % (i+1)), index_col=0)
-        bootstrap_attribution_table_abs = pd.read_csv(bootstrap_attribution_table_abs_filename.replace('_i_', '_%i_' % (i+1)), index_col=0)
-        stat_table = pd.read_csv(bootstrap_stat_table_filename.replace('_i_', '_%i_' % (i+1)), index_col=0)
-        # back-calculate mutation spectra from bootstrap attributions and signatures
-        # mutation_spectra = bootstrap_attribution_table_abs.dot(signatures.T)
-        for sample in samples:
-            for signature in signatures_to_consider:
-                attributions_per_sample_dict[sample].loc[i, signature] = bootstrap_attribution_table.loc[sample, signature]
-                attributions_per_signature_dict[signature].loc[i, sample] = bootstrap_attribution_table.loc[sample, signature]
-            # for category in categories:
-            #     mutation_spectra_dict[sample].loc[i, category] = mutation_spectra.loc[sample, category]
-            for metric in stat_metrics:
-                stat_metrics_dict[metric].loc[i, sample] = stat_table.loc[sample, metric]
-                stat_metrics_dict[metric].loc[i, sample] = stat_table.loc[sample, metric]
-
-    print('Bootstrap dataframes filled.')
-    print('Elapsed time:', datetime.now() - start_time)
-
-    # calculate confidence intervals and 'pruned' attributions, with 0 values for signatures where CIs consistent with 0
-    confidence_intervals = pd.DataFrame(index=samples, columns=signatures_to_consider, dtype=object)
-    pruned_attribution_table = pd.DataFrame(index=samples, columns=signatures_to_consider, dtype=int)
-    for sample in samples:
-        for signature in signatures_to_consider:
-            confidence_interval = calculate_confidence_interval(attributions_per_sample_dict[sample][signature], confidence = confidence_level*100)
-            central_value = central_attribution_table.loc[sample, signature]
-            confidence_intervals.loc[sample, signature] = [central_value, confidence_interval]
-            if confidence_interval[0]==0:
-                pruned_attribution_table.loc[sample, signature] = 0
-            else:
-                pruned_attribution_table.loc[sample, signature] = np.around(central_attribution_table_abs.loc[sample, signature])
-
-    print('Confidence intervals calculated.')
-    print('Elapsed time:', datetime.now() - start_time)
-
-    # calculate signature confidence probabilities
-    if 'SIM' in dataset_name:
-        for sample in samples:
-            for signature in signatures_to_consider:
-                # if signature is not modelled, add it as zeros in truth table:
-                if signature not in truth_attribution_table.columns:
-                    truth_attribution_table[signature] = 0
-                array = attributions_per_sample_dict[sample][signature]
-                central = confidence_intervals.loc[sample, signature][0]
-                lower, upper = confidence_intervals.loc[sample, signature][1]
-                lower_CI_attributions.loc[sample, signature] = lower
-                if signature in acting_signatures:
-                    if lower <= truth_attribution_table.loc[sample, signature] <= upper:
-                        signatures_CPs.loc[sample, signature] = 1
-                    else:
-                        signatures_CPs.loc[sample, signature] = 0
-                else:
-                    if lower <= truth_attribution_table.loc[sample, signature] <= upper:
-                        signatures_CPs.loc[sample, 'Others'] = 1
-                    else:
-                        signatures_CPs.loc[sample, 'Others'] = 0
-
-                # fill truth and measured difference dataframe
-                truth_and_measured_difference.loc[sample, 'Truth - mean'] += truth_attribution_table.loc[sample, signature] - np.mean(array)
-                truth_and_measured_difference.loc[sample, 'Truth - median'] += truth_attribution_table.loc[sample, signature] - np.median(array)
-                truth_and_measured_difference.loc[sample, 'Truth - NNLS'] += truth_attribution_table.loc[sample, signature] - central_attribution_table.loc[sample, signature]
-
-        # calculate out-of-the box confidence probabilities for all acting signatures
-        signatures_CPs = signatures_CPs.sum(axis=0).to_frame().T.div(len(samples))
-        print('Signature confidence probabilities calculated.')
-        print('Elapsed time:', datetime.now() - start_time)
-
-    # calculate CPs for a range of sensitivity thresholds for each sig
-    if 'SIM' in dataset_name:
-        signature_attribution_thresholds = [float(i)/100 for i in args.signature_attribution_thresholds]
-        signatures_CPs_dict = {}
-        for threshold in signature_attribution_thresholds:
-            signatures_CPs_dict[threshold] = pd.DataFrame(index=central_attribution_table.index, columns=signatures_to_consider, dtype=float)
-            for sample in samples:
-                for signature in signatures_to_consider:
-                    central = confidence_intervals.loc[sample, signature][0]
-                    lower, upper = confidence_intervals.loc[sample, signature][1]
-                    # increase upper bound of CI if less than threshold
-                    if lower == 0 and upper < threshold:
-                        upper = threshold
-                    if lower <= truth_attribution_table.loc[sample, signature] <= upper:
-                        signatures_CPs_dict[threshold].loc[sample, signature] = 1
-                    elif lower > 0 and upper > 0 and truth_attribution_table.loc[sample, signature] > 0:
-                        # this case includes cases when CI is not consistent with 0, signature is simulated but CI does not contain the true value
-                        signatures_CPs_dict[threshold].loc[sample, signature] = 1
-                    else:
-                        signatures_CPs_dict[threshold].loc[sample, signature] = 0
-            # normalise to calculate CPs
-            signatures_CPs_dict[threshold] = signatures_CPs_dict[threshold].sum(axis=0).to_frame().T.div(len(samples))
-
-        # extract attribution  thresholds at which CP reaches specified confidence level for each signature
-        sensitivity_thresholds = calculate_sensitivity_thresholds(signatures_CPs_dict, signatures_to_consider, signature_attribution_thresholds)
-        print('Signature sensitivity thresholds calculated.')
-        print('Elapsed time:', datetime.now() - start_time)
-
-    # # correct attributions per sample dict to disregard medians consistent with 0
-    # for sample in samples:
-    #     for signature in signatures_to_consider:
-    #         array = attributions_per_sample_dict[sample][signature]
-    #         # disregard attributions consistent with 0
-    #         # if confidence_interval[0]==0:
-    #         # disregard attribution with 0 CI median
-    #         if np.median(array) == 0:
-    #             attributions_per_sample_dict[sample][signature] = 0
-
-    # calculate signature prevalences
-    for sample in samples:
-        signatures_prevalences.loc[sample, :] = attributions_per_sample_dict[sample].astype(bool).sum(axis=0)
-        # if 'SIM' in dataset_name:
-            # # alternative procedure (considering bootstrap but not CIs)
-            # truth_one_sample_table = truth_attribution_table.loc[sample, :].to_frame().T
-            # truth_table = truth_one_sample_table.loc[truth_one_sample_table.index.repeat(number_of_b_samples)]
-            # stat_scores_tables.loc[sample, :] = calculate_stat_scores(signatures, attributions_per_sample_dict[sample], truth_table)
-            # for signature in signatures_to_consider:
-            #     stat_scores_per_sig[signature].loc[sample, :] = calculate_stat_scores([signature], attributions_per_sample_dict[sample], truth_table)
-
-    signatures_prevalences = signatures_prevalences/number_of_b_samples
-
-    print('Signature prevalences calculated.')
-    print('Elapsed time:', datetime.now() - start_time)
-
-    # calculate per-signature statistical scores
-    if 'SIM' in dataset_name:
-        stat_scores_tables.loc[0, :] = calculate_stat_scores(signatures, central_attribution_table, truth_attribution_table)
-        stat_scores_from_CI_tables.loc[0, :] = calculate_stat_scores(signatures, lower_CI_attributions, truth_attribution_table)
-        sensitivity_CI_tables.loc[0, :] = calculate_sensitivity_CI(signatures, central_attribution_table, truth_attribution_table)
-        sensitivity_CI_from_CI_tables.loc[0, :] = calculate_sensitivity_CI(signatures, lower_CI_attributions, truth_attribution_table)
-        specificity_CI_tables.loc[0, :] = calculate_specificity_CI(signatures, central_attribution_table, truth_attribution_table)
-        specificity_CI_from_CI_tables.loc[0, :] = calculate_specificity_CI(signatures, lower_CI_attributions, truth_attribution_table)
-        for signature in signatures_to_consider:
-            stat_scores_per_sig[signature].loc[0, :] = calculate_stat_scores([signature], central_attribution_table, truth_attribution_table)
-            stat_scores_from_CI_per_sig[signature].loc[0, :] = calculate_stat_scores([signature], lower_CI_attributions, truth_attribution_table)
-            sensitivity_CI_per_sig[signature].loc[0, :] = calculate_sensitivity_CI([signature], central_attribution_table, truth_attribution_table)
-            sensitivity_CI_from_CI_per_sig[signature].loc[0, :] = calculate_sensitivity_CI([signature], lower_CI_attributions, truth_attribution_table)
-            specificity_CI_per_sig[signature].loc[0, :] = calculate_specificity_CI([signature], central_attribution_table, truth_attribution_table)
-            specificity_CI_from_CI_per_sig[signature].loc[0, :] = calculate_specificity_CI([signature], lower_CI_attributions, truth_attribution_table)
+            sensitivity_CI_per_sig[signature] = pd.DataFrame(columns=['lower_CL', 'upper_CL'], dtype=float)
+            sensitivity_CI_from_CI_per_sig[signature] = pd.DataFrame(columns=['lower_CL', 'upper_CL'], dtype=float)
+            specificity_CI_per_sig[signature] = pd.DataFrame(columns=['lower_CL', 'upper_CL'], dtype=float)
+            specificity_CI_from_CI_per_sig[signature] = pd.DataFrame(columns=['lower_CL', 'upper_CL'], dtype=float)
+            
+            stat_scores_per_sig[signature].loc[0] = calculate_stat_scores(
+                [signature], central_attribution, truth_attribution_table
+            )
+            stat_scores_from_CI_per_sig[signature].loc[0] = calculate_stat_scores(
+                [signature], lower_CI_attributions, truth_attribution_table
+            )
+            sensitivity_CI_per_sig[signature].loc[0] = calculate_sensitivity_CI(
+                [signature], central_attribution, truth_attribution_table
+            )
+            sensitivity_CI_from_CI_per_sig[signature].loc[0] = calculate_sensitivity_CI(
+                [signature], lower_CI_attributions, truth_attribution_table
+            )
+            specificity_CI_per_sig[signature].loc[0] = calculate_specificity_CI(
+                [signature], central_attribution, truth_attribution_table
+            )
+            specificity_CI_from_CI_per_sig[signature].loc[0] = calculate_specificity_CI(
+                [signature], lower_CI_attributions, truth_attribution_table
+            )
+            
             for score in scores:
-                signatures_scores[score].loc[0, signature] = stat_scores_per_sig[signature].loc[0, score]
-                signatures_scores_from_CI[score].loc[0, signature] = stat_scores_from_CI_per_sig[signature].loc[0, score]
-        print('Signature stat scores calculated.')
-        print('Elapsed time:', datetime.now() - start_time)
+                signatures_scores[score].loc[0, signature] = \
+                    stat_scores_per_sig[signature].loc[0, score]
+                signatures_scores_from_CI[score].loc[0, signature] = \
+                    stat_scores_from_CI_per_sig[signature].loc[0, score]
+        
+        print(f'Metrics calculated. Elapsed: {datetime.now() - start_time}')
 
-    # write the outputs to files
-    if 'SIM' in dataset_name:
-        truth_and_measured_difference.to_csv(output_folder + '/truth_studies/truth_and_measured_difference_' + mutation_type + '.csv')
-        signatures_CPs.to_csv(output_folder + '/truth_studies/signatures_CPs_' + mutation_type + '.csv')
-        sensitivity_thresholds.to_csv(output_folder + '/truth_studies/sensitivity_thresholds_' + mutation_type + '.csv')
-        stat_scores_from_CI_tables.to_csv(output_folder + '/truth_studies/stat_scores_from_CI_tables_' + mutation_type + '.csv')
-        stat_scores_tables.to_csv(output_folder + '/truth_studies/stat_scores_tables_' + mutation_type + '.csv')
-        sensitivity_CI_from_CI_tables.to_csv(output_folder + '/truth_studies/sensitivity_CI_from_CI_tables_' + mutation_type + '.csv')
-        sensitivity_CI_tables.to_csv(output_folder + '/truth_studies/sensitivity_CI_tables_' + mutation_type + '.csv')
-        specificity_CI_from_CI_tables.to_csv(output_folder + '/truth_studies/specificity_CI_from_CI_tables_' + mutation_type + '.csv')
-        specificity_CI_tables.to_csv(output_folder + '/truth_studies/specificity_CI_tables_' + mutation_type + '.csv')
-        write_data_to_JSON(signatures_CPs_dict, output_folder + '/truth_studies/signatures_CPs_dict_' + mutation_type + '.json')
-        write_data_to_JSON(signatures_scores_from_CI, output_folder + '/truth_studies/signatures_scores_from_CI_' + mutation_type + '.json')
-        write_data_to_JSON(signatures_scores, output_folder + '/truth_studies/signatures_scores_' + mutation_type + '.json')
-        write_data_to_JSON(stat_scores_from_CI_per_sig, output_folder + '/truth_studies/stat_scores_from_CI_per_sig_' + mutation_type + '.json')
-        write_data_to_JSON(stat_scores_per_sig, output_folder + '/truth_studies/stat_scores_per_sig_' + mutation_type + '.json')
-        write_data_to_JSON(sensitivity_CI_from_CI_per_sig, output_folder + '/truth_studies/sensitivity_CI_from_CI_per_sig_' + mutation_type + '.json')
-        write_data_to_JSON(sensitivity_CI_per_sig, output_folder + '/truth_studies/sensitivity_CI_per_sig_' + mutation_type + '.json')
-        write_data_to_JSON(specificity_CI_from_CI_per_sig, output_folder + '/truth_studies/specificity_CI_from_CI_per_sig_' + mutation_type + '.json')
-        write_data_to_JSON(specificity_CI_per_sig, output_folder + '/truth_studies/specificity_CI_per_sig_' + mutation_type + '.json')
-        print('Truth studies outputs written.')
-        print('Elapsed time:', datetime.now() - start_time)
+    # Write outputs
+    print('Writing outputs...')
+    
+    # Common outputs
+    confidence_intervals.to_csv(f'{output_folder}/CIs_{filename}.csv')
+    signatures_prevalences.to_csv(
+        f'{output_folder}/signatures_prevalences_{args.dataset_name}_{args.mutation_type}.csv'
+    )
+    write_data_to_JSON(
+        attributions_per_sample, 
+        f'{output_folder}/attributions_per_sample_{filename}.json'
+    )
+    write_data_to_JSON(
+        attributions_per_signature,
+        f'{output_folder}/attributions_per_signature_{filename}.json'
+    )
+    write_data_to_JSON(
+        stat_metrics_dict, 
+        f'{output_folder}/stat_metrics_{filename}.json'
+    )
+    pruned_attribution_table.to_csv(
+        f'{output_folder}/pruned_attribution_{args.dataset_name}_{args.mutation_type}_abs_mutations.csv'
+    )
 
-    # common outputs
-    confidence_intervals.to_csv(output_folder + '/CIs_' + filename + '.csv')
-    signatures_prevalences.to_csv(output_folder + '/signatures_prevalences_' + dataset_name + '_' + mutation_type + '.csv')
-    write_data_to_JSON(attributions_per_sample_dict, output_folder + '/attributions_per_sample_' + filename + '.json')
-    write_data_to_JSON(attributions_per_signature_dict, output_folder + '/attributions_per_signature_' + filename + '.json')
-    write_data_to_JSON(stat_metrics_dict, output_folder + '/stat_metrics_' + filename + '.json')
-    # # pd.to_json function does not fully support MultiIndex (present in signature tables), hence commented out for now
-    # write_data_to_JSON(mutation_spectra_dict, output_folder + '/mutation_spectra_' + filename + '.json')
-    pruned_attribution_table.to_csv(output_folder + '/pruned_attribution_' + dataset_name + '_' + mutation_type + '_abs_mutations.csv')
+    # Simulated data outputs
+    if is_simulated:
+        truth_studies_path = f'{output_folder}/truth_studies'
+        truth_and_measured_difference.to_csv(
+            f'{truth_studies_path}/truth_and_measured_difference_{args.mutation_type}.csv'
+        )
+        signatures_CPs.to_csv(
+            f'{truth_studies_path}/signatures_CPs_{args.mutation_type}.csv'
+        )
+        
+        if args.signature_attribution_thresholds:
+            sensitivity_thresholds.to_csv(
+                f'{truth_studies_path}/sensitivity_thresholds_{args.mutation_type}.csv'
+            )
+            write_data_to_JSON(
+                signatures_CPs_dict,
+                f'{truth_studies_path}/signatures_CPs_dict_{args.mutation_type}.json'
+            )
+        
+        stat_scores_tables.to_csv(
+            f'{truth_studies_path}/stat_scores_tables_{args.mutation_type}.csv'
+        )
+        stat_scores_from_CI_tables.to_csv(
+            f'{truth_studies_path}/stat_scores_from_CI_tables_{args.mutation_type}.csv'
+        )
+        sensitivity_CI_tables.to_csv(
+            f'{truth_studies_path}/sensitivity_CI_tables_{args.mutation_type}.csv'
+        )
+        sensitivity_CI_from_CI_tables.to_csv(
+            f'{truth_studies_path}/sensitivity_CI_from_CI_tables_{args.mutation_type}.csv'
+        )
+        specificity_CI_tables.to_csv(
+            f'{truth_studies_path}/specificity_CI_tables_{args.mutation_type}.csv'
+        )
+        specificity_CI_from_CI_tables.to_csv(
+            f'{truth_studies_path}/specificity_CI_from_CI_tables_{args.mutation_type}.csv'
+        )
+        
+        write_data_to_JSON(signatures_scores, 
+                          f'{truth_studies_path}/signatures_scores_{args.mutation_type}.json')
+        write_data_to_JSON(signatures_scores_from_CI,
+                          f'{truth_studies_path}/signatures_scores_from_CI_{args.mutation_type}.json')
+        write_data_to_JSON(stat_scores_per_sig,
+                          f'{truth_studies_path}/stat_scores_per_sig_{args.mutation_type}.json')
+        write_data_to_JSON(stat_scores_from_CI_per_sig,
+                          f'{truth_studies_path}/stat_scores_from_CI_per_sig_{args.mutation_type}.json')
+        write_data_to_JSON(sensitivity_CI_per_sig,
+                          f'{truth_studies_path}/sensitivity_CI_per_sig_{args.mutation_type}.json')
+        write_data_to_JSON(sensitivity_CI_from_CI_per_sig,
+                          f'{truth_studies_path}/sensitivity_CI_from_CI_per_sig_{args.mutation_type}.json')
+        write_data_to_JSON(specificity_CI_per_sig,
+                          f'{truth_studies_path}/specificity_CI_per_sig_{args.mutation_type}.json')
+        write_data_to_JSON(specificity_CI_from_CI_per_sig,
+                          f'{truth_studies_path}/specificity_CI_from_CI_per_sig_{args.mutation_type}.json')
 
-    print('All remaining outputs written. Done!')
-    print('Elapsed time:', datetime.now() - start_time)
+    print(f'All outputs written. Total elapsed: {datetime.now() - start_time}')
+
+
+if __name__ == '__main__':
+    main()
