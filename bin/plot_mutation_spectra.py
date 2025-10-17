@@ -303,7 +303,7 @@ def plot_residuals(input_array, title = '', savepath = './test_gaus.pdf'):
     fig = plt.figure()
     ax = fig.add_subplot(111)
 
-    n, bins, patches = plt.hist(input_array, normed=True, bins=50, color='blue', histtype='step')
+    n, bins, patches = plt.hist(input_array, density=True, bins=50, color='blue', histtype='step')
     # fit a Gaussian to input distribution
     (mu, sigma) = stats.norm.fit(input_array)
     y = stats.norm.pdf( bins, mu, sigma)
@@ -411,23 +411,23 @@ if __name__ == '__main__':
             raise ValueError("Context %i is not supported." % context)
 
     if args.plot_fitted_spectra:
-        input_spectra = pd.read_csv('%s/%s/output_%s_%s_fitted_values.csv' % (input_folder, dataset_name, dataset_name, mutation_type), sep=None, index_col=index_col)
+        input_spectra = pd.read_csv('%s/%s/output_%s_%s_fitted_values.csv' % (input_folder, dataset_name, dataset_name, mutation_type), sep=',', index_col=index_col)
     elif args.plot_residuals:
-        input_spectra = pd.read_csv('%s/%s/output_%s_%s_residuals.csv' % (input_folder, dataset_name, dataset_name, mutation_type), sep=None, index_col=index_col)
+        input_spectra = pd.read_csv('%s/%s/output_%s_%s_residuals.csv' % (input_folder, dataset_name, dataset_name, mutation_type), sep=',', index_col=index_col)
     elif args.plot_signatures:
         if mutation_type=='SBS' and context!=96:
-            input_spectra = pd.read_csv('%s/%s_%s_%i_signatures.csv' % (signature_tables_path, signatures_prefix, mutation_type, context), sep=None, index_col=index_col)
+            input_spectra = pd.read_csv('%s/%s_%s_%i_signatures.csv' % (signature_tables_path, signatures_prefix, mutation_type, context), sep=',', index_col=index_col)
         else:
-            input_spectra = pd.read_csv('%s/%s_%s_signatures.csv' % (signature_tables_path, signatures_prefix, mutation_type), sep=None, index_col=index_col)
+            input_spectra = pd.read_csv('%s/%s_%s_signatures.csv' % (signature_tables_path, signatures_prefix, mutation_type), sep=',', index_col=index_col)
     else:
         if mutation_type=='SBS':
-            input_spectra = pd.read_csv('%s/%s/WGS_%s.%i.csv' % (input_folder, dataset_name, dataset_name, context), sep=None, index_col=index_col)
+            input_spectra = pd.read_csv('%s/%s/WGS_%s.%i.csv' % (input_folder, dataset_name, dataset_name, context), sep=',', index_col=index_col)
         elif mutation_type=='DBS':
-            input_spectra = pd.read_csv('%s/%s/WGS_%s.dinucs.csv' % (input_folder, dataset_name, dataset_name), sep=None, index_col=index_col)
+            input_spectra = pd.read_csv('%s/%s/WGS_%s.dinucs.csv' % (input_folder, dataset_name, dataset_name), sep=',', index_col=index_col)
         elif mutation_type=='ID':
-            input_spectra = pd.read_csv('%s/%s/WGS_%s.indels.csv' % (input_folder, dataset_name, dataset_name), sep=None, index_col=index_col)
+            input_spectra = pd.read_csv('%s/%s/WGS_%s.indels.csv' % (input_folder, dataset_name, dataset_name), sep=',', index_col=index_col)
         else: # SV and CNV
-            input_spectra = pd.read_csv('%s/%s/WGS_%s.%s.csv' % (input_folder, dataset_name, dataset_name, mutation_type), sep=None, index_col=index_col)
+            input_spectra = pd.read_csv('%s/%s/WGS_%s.%s.csv' % (input_folder, dataset_name, dataset_name, mutation_type), sep=',', index_col=index_col)
 
     if args.strand_bias:
         strand_bias_subfolder = 'TSB'
