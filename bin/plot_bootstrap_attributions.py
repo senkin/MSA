@@ -27,9 +27,11 @@ def plot_bootstrap_attribution_histograms(input_table, centrals, title, savepath
         bins = None
 
     for column in table.columns:
-        color = next(ax._get_lines.prop_cycler)['color']
-        plt.hist(table[column].to_list(), label = column, bins = bins, histtype='step', color=color, density=True)
-        plt.axvline(x=centrals[column], color=color, ls = '--')
+        # hist returns (n, bins, patches)
+        n, bins, patches = plt.hist(table[column].to_list(), label=column, bins=bins, 
+                                    histtype='step', density=True)
+        color = patches[0].get_edgecolor()  # Get edge color for 'step' histograms
+        plt.axvline(x=centrals[column], color=color, ls='--')
 
     legend = plt.legend()
     plt.gca().add_artist(legend)

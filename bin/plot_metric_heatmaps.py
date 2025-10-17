@@ -248,10 +248,10 @@ if __name__ == '__main__':
         # print(signatures_CPs_wrt_thresholds_dict)
 
         for key, signature_CP_per_parameters in signatures_CPs_wrt_thresholds_dict.items():
-            CPs = [signature_CP_per_parameters[str(threshold)][signature][0] for threshold in signature_attribution_thresholds]
-            color = next(ax._get_lines.prop_cycler)['color']
+            CPs = [signature_CP_per_parameters[str(threshold)][signature].iloc[0] for threshold in signature_attribution_thresholds]
             plt.axhline(y=confidence_level, color='r', linestyle='--')
-            plt.scatter(signature_attribution_thresholds, CPs, label=key, color=color, s=10)
+            scatter = plt.scatter(signature_attribution_thresholds, CPs, label=key, s=10)
+            color = scatter.get_facecolors()[0]  # Get the color that was assigned
             plt.plot(signature_attribution_thresholds, CPs, color=color, linestyle='--')
         plt.legend(loc="best")
         plt.tight_layout()
