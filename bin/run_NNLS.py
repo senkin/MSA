@@ -383,36 +383,36 @@ if __name__ == '__main__':
     if mutation_type == 'SBS':
         if context == 96:
             signatures = pd.read_csv(f'{sig_path}/{sig_prefix}_{mutation_type}_signatures.csv', 
-                                    sep=None, index_col=[0,1])
+                                    sep=',', index_col=[0,1])
             input_mutations = pd.read_csv(f'{inp_path}/{dataset_name}/WGS_{dataset_name}.{context}.csv',
-                                         sep=None, index_col=[0,1])
+                                         sep=',', index_col=[0,1])
         elif context in [192, 288]:
             signatures = pd.read_csv(f'{sig_path}/{sig_prefix}_{mutation_type}_{context}_signatures.csv',
-                                    sep=None, index_col=[0,1,2])
+                                    sep=',', index_col=[0,1,2])
             input_mutations = pd.read_csv(f'{inp_path}/{dataset_name}/WGS_{dataset_name}.{context}.csv',
-                                         sep=None, index_col=[0,1,2])
+                                         sep=',', index_col=[0,1,2])
         elif context in [1536, 4608]:
             signatures = pd.read_csv(f'{sig_path}/{sig_prefix}_{mutation_type}_{context}_signatures.csv',
-                                    sep=None, index_col=0)
+                                    sep=',', index_col=0)
             input_mutations = pd.read_csv(f'{inp_path}/{dataset_name}/WGS_{dataset_name}.{context}.csv',
-                                         sep=None, index_col=0)
+                                         sep=',', index_col=0)
         else:
             raise ValueError(f"Context {context} is not supported")
     elif mutation_type == 'DBS':
         signatures = pd.read_csv(f'{sig_path}/{sig_prefix}_{mutation_type}_signatures.csv',
-                                sep=None, index_col=0)
+                                sep=',', index_col=0)
         input_mutations = pd.read_csv(f'{inp_path}/{dataset_name}/WGS_{dataset_name}.dinucs.csv',
-                                     sep=None, index_col=0)
+                                     sep=',', index_col=0)
     elif mutation_type == 'ID':
         signatures = pd.read_csv(f'{sig_path}/{sig_prefix}_{mutation_type}_signatures.csv',
-                                sep=None, index_col=0)
+                                sep=',', index_col=0)
         input_mutations = pd.read_csv(f'{inp_path}/{dataset_name}/WGS_{dataset_name}.indels.csv',
-                                     sep=None, index_col=0)
+                                     sep=',', index_col=0)
     else:  # SV and CNV
         signatures = pd.read_csv(f'{sig_path}/{sig_prefix}_{mutation_type}_signatures.csv',
-                                sep=None, index_col=0)
+                                sep=',', index_col=0)
         input_mutations = pd.read_csv(f'{inp_path}/{dataset_name}/WGS_{dataset_name}.{mutation_type}.csv',
-                                     sep=None, index_col=0)
+                                     sep=',', index_col=0)
     
     print(f"Performing NNLS for {dataset_name} dataset, {mutation_type} mutation type.")
     if mutation_type == 'SBS':
