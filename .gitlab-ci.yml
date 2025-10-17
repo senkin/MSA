@@ -5,7 +5,6 @@ stages:
 test_nextflow:
   image: ssenkin/msa:latest
   stage: test
-  before_script:
-    - conda activate MSA
   script:
-    - ./nextflow run run_auto_optimised_analysis.nf -profile test
+    - conda activate MSA
+    - nextflow run run_auto_optimised_analysis.nf -profile test
