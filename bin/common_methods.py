@@ -8,6 +8,7 @@ import copy
 import warnings
 import numpy as np
 import pandas as pd
+from io import StringIO
 from scipy import stats
 from scipy.spatial import distance
 from statsmodels.stats.proportion import proportion_confint
@@ -89,18 +90,18 @@ def write_data_to_JSON(data, JSON_output_file, json_orient = 'columns', indent =
 
     output_file.close()
 
-def read_data_from_JSON(JSON_input_file, pandas = True, json_orient = 'columns'):
-    input_file = open(JSON_input_file, 'r')
-    input_JSON = ''.join(input_file.readlines())
-    data = json.loads(input_JSON)
+def read_data_from_JSON(JSON_input_file, pandas=True, json_orient='columns'):
+    with open(JSON_input_file, 'r') as input_file:
+        data = json.load(input_file)  # Use json.load() directly on file object
+    
     if pandas:
         for key, value in data.items():
-            # extract dataframe and convert index/columns to str
-            df = pd.read_json(value, orient = json_orient, convert_axes = False)
+            # Wrap JSON string in StringIO
+            df = pd.read_json(StringIO(value), orient=json_orient, convert_axes=False)
             df.columns = df.columns.astype(str)
             df.index = df.index.astype(str)
             data[key] = df
-    input_file.close()
+    
     return data
 
 def plot_array_as_histogram(arrays, labels, title, bins=[0.01*k for k in range(101)], savepath='./hist.pdf'):
@@ -284,18 +285,19 @@ def calculate_stat_scores(signatures, reco_table, truth_table, number_of_samples
     
     true_positives, true_negatives, false_positives, false_negatives = calculate_confusion_matrix(signatures, reco_table, truth_table, number_of_samples)
     
-    sensitivity = np.float64(true_positives) / (true_positives + false_negatives)
-    specificity = np.float64(true_negatives) / (true_negatives + false_positives)
-    precision = np.float64(true_positives) / (true_positives + false_positives)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        sensitivity = np.float64(true_positives) / (true_positives + false_negatives)
+        specificity = np.float64(true_negatives) / (true_negatives + false_positives)
+        precision = np.float64(true_positives) / (true_positives + false_positives)
 
-    # # verbose info
-    # print("Missed sigs mean/median/stdev/max:",np.mean(false_negatives_signatures),np.median(false_negatives_signatures),np.std(false_negatives_signatures),np.max(false_negatives_signatures))
-    # plot_array_as_histogram([true_positives_signatures, false_positives_signatures, false_negatives_signatures], ['True positives', 'False positives', 'False negatives'], title = 'Signature attribution distributions', savepath="distributions.pdf")
+        # # verbose info
+        # print("Missed sigs mean/median/stdev/max:",np.mean(false_negatives_signatures),np.median(false_negatives_signatures),np.std(false_negatives_signatures),np.max(false_negatives_signatures))
+        # plot_array_as_histogram([true_positives_signatures, false_positives_signatures, false_negatives_signatures], ['True positives', 'False positives', 'False negatives'], title = 'Signature attribution distributions', savepath="distributions.pdf")
 
-    accuracy = np.float64(true_positives + true_negatives) / (true_positives + true_negatives + false_positives + false_negatives)
-    F1 = 2 * np.float64(true_positives) / (2 * true_positives + false_positives + false_negatives)
-    MCC = np.float64(true_positives * true_negatives - false_positives * false_negatives) / math.sqrt((true_positives + false_positives)
-            * (true_positives + false_negatives) * (true_negatives + false_positives) * (true_negatives + false_negatives))
+        accuracy = np.float64(true_positives + true_negatives) / (true_positives + true_negatives + false_positives + false_negatives)
+        F1 = 2 * np.float64(true_positives) / (2 * true_positives + false_positives + false_negatives)
+        MCC = np.float64(true_positives * true_negatives - false_positives * false_negatives) / math.sqrt((true_positives + false_positives)
+                * (true_positives + false_negatives) * (true_negatives + false_positives) * (true_negatives + false_negatives))
 
     return sensitivity, specificity, precision, accuracy, F1, MCC
 
@@ -371,7 +373,7 @@ def clean_up_labels(signature, category, mutation_type='SBS'):
 
     if type(sig_clone.index) != pd.MultiIndex:
         if mutation_type=='SBS':
-            sig_clone.index = sig_clone.index.str.replace('\[' + category + '\]', category[0])
+            sig_clone.index = sig_clone.index.str.replace(r'\[' + category + r'\]', category[0])
         elif mutation_type=='DBS':
             sig_clone.index = sig_clone.index.str.replace(category, '')
         elif mutation_type=='ID':
