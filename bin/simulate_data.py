@@ -191,7 +191,7 @@ if __name__ == '__main__':
     if args.bootstrap_input_signature_activities_table:
         if not args.input_table:
             parser.error("Please provide the input signature activities table for bootstrap with -i option.")
-        input_table = pd.read_csv(args.input_table, index_col=0, sep=None)
+        input_table = pd.read_csv(args.input_table, index_col=0, sep=',')
         bootstrapped_table = input_table.sample(n=number_of_samples, replace=True)
         for signature in input_table.columns:
             print('Generating signature burden for', signature)
@@ -233,8 +233,8 @@ if __name__ == '__main__':
 
     samples_range = range(0,number_of_samples)
 
-    generated_weights = pd.DataFrame(0, index=samples_range, columns=reference_signatures.columns)
-    generated_mutations = pd.DataFrame(0, index=reference_signatures.index, columns=samples_range)
+    generated_weights = pd.DataFrame(0, index=samples_range, columns=reference_signatures.columns, dtype=float)
+    generated_mutations = pd.DataFrame(0, index=reference_signatures.index, columns=samples_range, dtype=float)
 
     # obtain generated mutational burdens
     generated_mutational_burdens = []
@@ -306,7 +306,7 @@ if __name__ == '__main__':
             generated_mutations.loc[generated_mutations[i]<0, i] = 0
 
         # treating nans with zero (happens when mutation burden is zero in older pandas versions)
-        generated_mutations[i].fillna(0, inplace=True)
+        generated_mutations[i] = generated_mutations[i].fillna(0)
 
         # rounding and converting to integer counts
         generated_mutations[i] = round(generated_mutations[i],0)
