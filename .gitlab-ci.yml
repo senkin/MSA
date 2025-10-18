@@ -3,7 +3,9 @@ stages:
   - test
 
 test_nextflow:
-  image: ssenkin/msa:latest
+  image:
+    name: ssenkin/msa:latest
+    platform: linux/amd64
   stage: test
   script:
     - mamba run -n MSA nextflow run run_auto_optimised_analysis.nf -profile test
