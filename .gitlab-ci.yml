@@ -6,4 +6,4 @@ test_nextflow:
   image: ssenkin/msa:latest
   stage: test
   script:
-    - conda run -n MSA nextflow run run_auto_optimised_analysis.nf -profile test
+    - mamba run -n MSA nextflow run run_auto_optimised_analysis.nf -profile test
