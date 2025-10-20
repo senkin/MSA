@@ -21,8 +21,7 @@ RUN apt-get update && \
     mamba env create -n MSA -f /tmp/environment.yml && \
     conda clean -afy && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /root/.cache
-SHELL ["bash", "--login", "-c"]
 RUN echo "conda activate MSA" >> ~/.bashrc
 ENV PATH=/opt/conda/envs/MSA/bin:$PATH
 WORKDIR /workspace
-ENTRYPOINT ["/bin/bash"]
+
