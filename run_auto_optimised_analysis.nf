@@ -209,6 +209,7 @@ workflow {
         signature_files_channel = convert_data_workflow.out.signature_files
         
         if (params.plot_signatures) {
+            convert_data_workflow.out.signature_files.collect().view { "Conversion complete, starting plots..." }
             for (mutation_type in mutation_types) {
                 plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/signature_tables", 'signatures')
             }
@@ -219,6 +220,7 @@ workflow {
         signature_files_channel = convert_data_workflow.out.signature_files
         
         if (params.plot_signatures) {
+            convert_data_workflow.out.signature_files.collect().view { "Conversion complete, starting plots..." }
             for (mutation_type in mutation_types) {
                 plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/signature_tables", 'signatures')
             }
@@ -242,6 +244,7 @@ workflow {
         input_files_channel = convert_data_workflow.out.input_files
         
         if (params.plot_input_spectra) {
+            convert_data_workflow.out.input_files.collect().view { "Conversion complete, starting plots..." }
             for (mutation_type in mutation_types) {
                 plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/input_tables", 'mutation_spectra')
             }
@@ -252,6 +255,7 @@ workflow {
         input_files_channel = convert_data_workflow.out.input_files
         
         if (params.plot_input_spectra) {
+            convert_data_workflow.out.input_files.collect().view { "Conversion complete, starting plots..." }
             for (mutation_type in mutation_types) {
                 plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/input_tables", 'mutation_spectra')
             }
