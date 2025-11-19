@@ -10,7 +10,7 @@ workflow OPTIMISATION_PLOTS_workflow {
     // Process to plot optimisation plots
     process plot_optimisation_plots {
         tag "${mutation_type}/${dataset}"
-        publishDir "${params.optimisation_plots_output_path}"
+        publishDir "${params.optimisation_plots_output_path}", mode: 'move', overwrite: true
         
         input:
         tuple val(dataset), val(mutation_type)

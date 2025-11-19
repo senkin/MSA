@@ -16,7 +16,7 @@ workflow plot_spectra_workflow {
     main:
     process plot_spectra {
         tag "${mutation_type}/${dataset}/${plot_type}"
-        publishDir "${params.plots_output_path}", mode: 'move'
+        publishDir "${params.plots_output_path}", mode: 'move', overwrite: true
 
         input:
         val dataset

@@ -373,12 +373,12 @@ def clean_up_labels(signature, category, mutation_type='SBS'):
 
     if type(sig_clone.index) != pd.MultiIndex:
         if mutation_type=='SBS':
-            sig_clone.index = sig_clone.index.str.replace(r'\[' + category + r'\]', category[0])
+            sig_clone.index = sig_clone.index.str.replace(r'\[' + category + r'\]', category[0], regex=True)
         elif mutation_type=='DBS':
-            sig_clone.index = sig_clone.index.str.replace(category, '')
+            sig_clone.index = sig_clone.index.str.replace(category, '', regex=True)
         elif mutation_type=='ID':
-            sig_clone.index = sig_clone.index.str.replace(category, '')
-            sig_clone.index = sig_clone.index.str.replace('_', '')
+            sig_clone.index = sig_clone.index.str.replace(category, '', regex=True)
+            sig_clone.index = sig_clone.index.str.replace('_', '', regex=False)
 
             # special treatment for some indel categories - removes '+' sign in front of integers
             if '+' in category:
