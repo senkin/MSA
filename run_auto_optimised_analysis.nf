@@ -61,6 +61,7 @@ params.use_absolute_attributions = false // use absolute mutation counts in fina
 params.metric_to_prioritise = "specificity" // set a metric to prioritise (default: specificity), requiring at least the specified threshold or closest alternative
 params.metric_threshold = 0.95 // specify the minimum threshold of the prioritised metric
 params.signatures_to_prioritise = [] // set a list of signatures to prioritise (empty list means all, by default)
+params.signatures_to_deprioritise = [] // set a list of signatures to deprioritise (empty list means none, by default)
 params.no_CI_for_penalties = false // do not use confidence intervals for optimal penalties calculation
 params.calculate_penalty_on_average = false // apply criteria based on signatures overall (on average, less conservative), rather than maximising prioritised metric for every signature (more conservative)
 

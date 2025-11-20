@@ -155,6 +155,8 @@ if __name__ == '__main__':
                       help="specify the minimum threshold of the prioritised metric")
     parser.add_argument("--signatures_to_prioritise", nargs='+', dest="signatures_to_prioritise",
                       help="set a list of signatures to prioritise (all by default)")
+    parser.add_argument("--signatures_to_deprioritise", nargs='+', dest="signatures_to_deprioritise",
+                      help="set a list of signatures to deprioritise (none by default)")
     parser.add_argument("--average", dest="average", action="store_true",
                       help="apply criteria based on signatures overall (on average, less conservative), rather than maximising prioritised metric for every signature (more conservative)")
     parser.add_argument("-W", "--weak_thresholds", nargs='+', dest="weak_thresholds",
@@ -184,6 +186,11 @@ if __name__ == '__main__':
     average = args.average
     if args.signatures_to_prioritise:
         signatures_to_prioritise = [sig for sig in args.signatures_to_prioritise if mutation_type in sig] # only keeping relevant mutation type signatures
+    else:
+        signatures_to_prioritise = []
+
+    if args.signatures_to_deprioritise:
+        signatures_to_deprioritise = [sig for sig in args.signatures_to_deprioritise if mutation_type in sig] # only keeping relevant mutation type signatures
     else:
         signatures_to_prioritise = []
 
@@ -355,6 +362,10 @@ if __name__ == '__main__':
     # penalties calculation and filling dataframe
     for signature in all_signatures:
         optimal_weak_penalty, optimal_strong_penalty = calculate_optimal_penalty(sensitivity_tables_per_sig_to_use[signature], specificity_tables_per_sig_to_use[signature], label = signature, metric_to_prioritise=metric_to_prioritise, threshold=metric_threshold)
+        if signature in signatures_to_deprioritise:
+            warnings.warn('Deprioritising signature %s: setting its optimal penalties to NaN' % signature)
+            optimal_weak_penalty = np.nan
+            optimal_strong_penalty = np.nan
         optimal_penalties.at[signature, 'optimal_weak_penalty'] = optimal_weak_penalty
         optimal_penalties.at[signature, 'optimal_strong_penalty'] = optimal_strong_penalty
     average_optimal_weak_penalty, average_optimal_strong_penalty = calculate_optimal_penalty(sensitivity_table_to_use, specificity_table_to_use, label = 'average', metric_to_prioritise=metric_to_prioritise, threshold=metric_threshold)
