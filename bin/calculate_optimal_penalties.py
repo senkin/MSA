@@ -192,7 +192,7 @@ if __name__ == '__main__':
     if args.signatures_to_deprioritise:
         signatures_to_deprioritise = [sig for sig in args.signatures_to_deprioritise if mutation_type in sig] # only keeping relevant mutation type signatures
     else:
-        signatures_to_prioritise = []
+        signatures_to_deprioritise = []
 
     if not weak_thresholds or not strong_thresholds:
         raise ValueError("Please specify the lists of thresholds.")
