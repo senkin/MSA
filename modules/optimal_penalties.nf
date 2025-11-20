@@ -11,10 +11,10 @@ workflow OPTIMAL_PENALTIES_workflow {
     // Process to calculate optimal penalties
     process calculate_optimal_penalties {
         tag "${mutation_type}/${dataset}"
-        publishDir "${params.optimisation_NNLS_output_path}"
+        publishDir "${params.optimisation_NNLS_output_path}", mode: 'copy', overwrite: true
         
         input:
-        path '*.csv'  // This mimics the DSL1 file ('*.csv') pattern
+        path '*.csv'
         tuple val(dataset), val(mutation_type)
         val weak_thresholds_list
         val strong_thresholds_list

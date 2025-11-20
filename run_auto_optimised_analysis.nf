@@ -32,6 +32,7 @@ params.output_path = "${workflow.launchDir}" // specify full path to output fold
 params.tables_output_path = params.output_path + "/output_tables"
 params.plots_output_path = params.output_path + "/plots"
 params.temp_path = params.output_path + "/temp"
+params.cleanup_temp = true // set to true to remove temporary files after run is complete
 
 // signatures to use
 params.signature_tables = "${workflow.projectDir}/signature_tables"
@@ -197,6 +198,7 @@ include { BOOTSTRAP_TABLES_workflow } from './modules/bootstrap_tables'
 include { FINAL_BOOTSTRAP_TABLES_workflow } from './modules/bootstrap_tables'
 include { OPTIMAL_PENALTIES_workflow } from './modules/optimal_penalties'
 include { OPTIMISATION_PLOTS_workflow } from './modules/optimisation_plots'
+include { cleanup_workflow } from './modules/cleanup'
 
 // Main workflow
 workflow {
@@ -390,6 +392,15 @@ workflow {
             FINAL_BOOTSTRAP_TABLES_workflow.out.attributions_per_sample,
             FINAL_BOOTSTRAP_TABLES_workflow.out.signature_prevalences
         )
+    }
+    // Cleanup temporary files if specified
+    if (params.cleanup_temp) {
+        all_plots_done = ALL_FINAL_PLOTS_workflow.out.bootstrap_plots
+            .mix(ALL_FINAL_PLOTS_workflow.out.metrics_plots)
+            .mix(ALL_FINAL_PLOTS_workflow.out.fitted_plots)
+            .mix(ALL_FINAL_PLOTS_workflow.out.residuals_plots)
+            .collect()
+        cleanup_workflow(all_plots_done)
     }
 }
 
