@@ -55,30 +55,25 @@ def convert_index(input_dataframe, context=96):
     
     return input_table
 
-def load_signature_templates(signature_tables_path, input_signatures_prefix, mutation_types, contexts):
-    """Load signature templates for reindexing."""
+def load_signature_templates(signature_tables_path, input_signatures_prefix, mutation_types, context):
     signatures = {}
-    
     for mutation_type in mutation_types:
         if mutation_type == 'SBS':
-            for context in contexts:
-                if context == 96:
-                    index_col = [0, 1]
-                    sig_file = f'{signature_tables_path}/{input_signatures_prefix}_{mutation_type}_signatures.csv'
-                elif context in [192, 288]:
-                    index_col = [0, 1, 2]
-                    sig_file = f'{signature_tables_path}/{input_signatures_prefix}_{mutation_type}_{context}_signatures.csv'
-                elif context in [1536, 4608]:
-                    index_col = 0
-                    sig_file = f'{signature_tables_path}/{input_signatures_prefix}_{mutation_type}_{context}_signatures.csv'
-                
-                if os.path.exists(sig_file):
-                    signatures[mutation_type + str(context)] = pd.read_csv(sig_file, sep=',', index_col=index_col)
+            if context == 96:
+                index_col = [0, 1]
+                sig_file = f'{signature_tables_path}/{input_signatures_prefix}_{mutation_type}_signatures.csv'
+            elif context in [192, 288]:
+                index_col = [0, 1, 2]
+                sig_file = f'{signature_tables_path}/{input_signatures_prefix}_{mutation_type}_{context}_signatures.csv'
+            elif context in [1536, 4608]:
+                index_col = 0
+                sig_file = f'{signature_tables_path}/{input_signatures_prefix}_{mutation_type}_{context}_signatures.csv'
+            if os.path.exists(sig_file):
+                signatures[mutation_type + str(context)] = pd.read_csv(sig_file, sep=',', index_col=index_col)
         else:
             sig_file = f'{signature_tables_path}/{input_signatures_prefix}_{mutation_type}_signatures.csv'
             if os.path.exists(sig_file):
                 signatures[mutation_type] = pd.read_csv(sig_file, sep=',', index_col=0)
-    
     return signatures
 
 def find_input_files_directory(input_path, mutation_types, use_extractor_for_mutation_tables):
@@ -155,11 +150,11 @@ def is_already_converted(file_path, mutation_type, context, signatures):
         # Not comma-separated or other read error - needs conversion
         return False, None
 
-def process_mutation_tables(input_files_by_type, signatures, dataset_name, output_path, contexts, use_extractor_for_mutation_tables, specific_files_mode=False):
+def process_mutation_tables(input_files_by_type, signatures, dataset_name, output_path, context, use_extractor_for_mutation_tables, specific_files_mode=False):
     """Process mutation tables (either from directory or specific files).
     
     Args:
-        specific_files_mode: If True, use contexts parameter directly instead of inferring from filenames
+        specific_files_mode: If True, use context parameter directly instead of inferring from filenames
     """
     make_folder_if_not_exists(f'{output_path}/{dataset_name}')
     
@@ -171,13 +166,12 @@ def process_mutation_tables(input_files_by_type, signatures, dataset_name, outpu
             if specific_files_mode:
                 # For specific files, check if already converted
                 if mutation_type == 'SBS':
-                    context = contexts[0]
                     is_converted, existing_df = is_already_converted(file_path, mutation_type, context, signatures)
                 else:
                     # For non-SBS, use default context value for checking
                     context_mapping = {'DBS': 78, 'ID': 83, 'SV': 32, 'CNV': 48}
-                    context = context_mapping.get(mutation_type, 0)
-                    is_converted, existing_df = is_already_converted(file_path, mutation_type, context, signatures)
+                    ctx = context_mapping.get(mutation_type, 0)
+                    is_converted, existing_df = is_already_converted(file_path, mutation_type, ctx, signatures)
                 
                 if is_converted and existing_df is not None:
                     # File is already in desired format - just save with new name
@@ -199,10 +193,9 @@ def process_mutation_tables(input_files_by_type, signatures, dataset_name, outpu
                 # Need conversion
                 # For specific files, use the mutation type and context from parameters
                 if mutation_type == 'SBS':
-                    context = contexts[0]  # Already validated to have exactly one context
                     mutation_type_with_context = f'SBS{context}'
                     print(f'Processing specific file: {file_path} as {mutation_type} context {context}')
-                    process_sbs_mutation_table(file_path, mutation_type_with_context, [context], signatures, dataset_name, output_path)
+                    process_sbs_mutation_table(file_path, mutation_type_with_context, context, signatures, dataset_name, output_path)
                 else:
                     # For non-SBS, process directly
                     context_mapping = {'DBS': '78', 'ID': '83', 'SV': '32', 'CNV': '48'}
@@ -219,34 +212,32 @@ def process_mutation_tables(input_files_by_type, signatures, dataset_name, outpu
                 print(f'Processing file: {file_path} (context: {mutation_type_with_context})')
                 
                 if mutation_type == 'SBS':
-                    process_sbs_mutation_table(file_path, mutation_type_with_context, contexts, signatures, dataset_name, output_path)
+                    process_sbs_mutation_table(file_path, mutation_type_with_context, context, signatures, dataset_name, output_path)
                 else:
                     process_non_sbs_mutation_table(file_path, mutation_type, mutation_type_with_context, signatures, dataset_name, output_path)
 
-def process_sbs_mutation_table(file_path, mutation_type_with_context, contexts, signatures, dataset_name, output_path):
+def process_sbs_mutation_table(file_path, mutation_type_with_context, context, signatures, dataset_name, output_path):
     """Process SBS mutation table."""
-    for context in contexts:
-        if context == 192 and '384' not in mutation_type_with_context:
-            continue
-        if context != 192 and str(context) not in mutation_type_with_context:
-            continue
-        
-        input_table = pd.read_csv(file_path, sep='\t', index_col=0)
-        print(f'Converting SBS context {context} from {file_path}')
-        
-        input_table = convert_index(input_table, context=context)
-        signature_key = f'SBS{context}'
-        
-        if signature_key in signatures:
-            input_table = input_table.reindex(signatures[signature_key].index)
-            compare_index(input_table, signatures[signature_key])
-        
-        new_filename = f'{output_path}/{dataset_name}/WGS_{dataset_name}.{context}.csv'
-        if context == 192:
-            new_filename = new_filename.replace('SBS384', 'SBS192')
-        
-        input_table.to_csv(new_filename, sep=',')
-        print(f'Saved: {new_filename}')
+    # if context == 192 and '384' not in mutation_type_with_context:
+        # return
+    if context != 192 and str(context) not in mutation_type_with_context:
+        return
+    input_table = pd.read_csv(file_path, sep='\t', index_col=0)
+    print(f'Converting SBS context {context} from {file_path}')
+    
+    input_table = convert_index(input_table, context=context)
+    signature_key = f'SBS{context}'
+    
+    if signature_key in signatures:
+        input_table = input_table.reindex(signatures[signature_key].index)
+        compare_index(input_table, signatures[signature_key])
+    
+    new_filename = f'{output_path}/{dataset_name}/WGS_{dataset_name}.{context}.csv'
+    if context == 192:
+        new_filename = new_filename.replace('SBS384', 'SBS192')
+    
+    input_table.to_csv(new_filename, sep=',')
+    print(f'Saved: {new_filename}')
 
 def process_non_sbs_mutation_table(file_path, mutation_type, mutation_type_with_context, signatures, dataset_name, output_path):
     """Process non-SBS mutation table."""
@@ -275,7 +266,7 @@ def process_non_sbs_mutation_table(file_path, mutation_type, mutation_type_with_
     input_table.to_csv(new_filename, sep=',')
     print(f'Saved: {new_filename}')
 
-def process_signature_tables(signature_files_by_type, signatures, contexts, output_path, reindexed_signatures_prefix, COSMIC, specific_files_mode=False):
+def process_signature_tables(signature_files_by_type, signatures, context, output_path, reindexed_signatures_prefix, COSMIC, specific_files_mode=False):
     """Process signature tables for reindexing.
 
     If `specific_files_mode` is True, each provided file is checked:
@@ -293,7 +284,6 @@ def process_signature_tables(signature_files_by_type, signatures, contexts, outp
                 # For specific files, check if already converted (comma-separated) and/or reindex if needed
                 if mutation_type == 'SBS':
                     # specific-file mode for SBS expects exactly one context
-                    context = contexts[0]
                     is_converted, existing_df = is_already_converted(signature_table_path, mutation_type, context, signatures)
 
                     if is_converted and existing_df is not None:
@@ -326,7 +316,7 @@ def process_signature_tables(signature_files_by_type, signatures, contexts, outp
             else:
                 # Original directory-based behavior (unchanged)
                 if mutation_type == 'SBS':
-                    process_sbs_signature_table(signature_table_path, contexts, signatures, output_path, reindexed_signatures_prefix, COSMIC)
+                    process_sbs_signature_table(signature_table_path, context, signatures, output_path, reindexed_signatures_prefix, COSMIC)
                 else:
                     process_non_sbs_signature_table(signature_table_path, mutation_type, signatures, output_path, reindexed_signatures_prefix)
 
@@ -353,30 +343,29 @@ def process_sbs_signature_table_with_context(signature_table_path, context, sign
     reindexed_signatures.to_csv(filename, sep=',')
     print(f'Saved reindexed signature table: {filename}')
 
-def process_sbs_signature_table(signature_table_path, contexts, signatures, output_path, reindexed_signatures_prefix, COSMIC):
+def process_sbs_signature_table(signature_table_path, context, signatures, output_path, reindexed_signatures_prefix, COSMIC):
     """Process SBS signature table."""
-    for context in contexts:
-        if str(context) not in signature_table_path:
-            continue
-        
-        signature_table_to_reindex = pd.read_csv(signature_table_path, sep='\t', index_col=0)
-        print(f'Converting signature table {signature_table_path} (SBS, context {context})')
-        
-        template_context = context if not COSMIC else 96
-        reindexed_signatures = convert_index(signature_table_to_reindex, context=template_context)
-        
-        template_key = f'SBS{template_context}'
-        if template_key in signatures:
-            template_signatures = signatures[template_key]
-            reindexed_signatures = reindexed_signatures.reindex(template_signatures.index)
-            compare_index(reindexed_signatures, template_signatures)
-        
-        filename = f'{output_path}/{reindexed_signatures_prefix}_SBS_{context}_signatures.csv'
-        if context == 96:
-            filename = filename.replace(f'_{context}', '')
-        
-        reindexed_signatures.to_csv(filename, sep=',')
-        print(f'Saved reindexed signature table: {filename}')
+    if str(context) not in signature_table_path:
+        return
+    
+    signature_table_to_reindex = pd.read_csv(signature_table_path, sep='\t', index_col=0)
+    print(f'Converting signature table {signature_table_path} (SBS, context {context})')
+    
+    template_context = context if not COSMIC else 96
+    reindexed_signatures = convert_index(signature_table_to_reindex, context=template_context)
+    
+    template_key = f'SBS{template_context}'
+    if template_key in signatures:
+        template_signatures = signatures[template_key]
+        reindexed_signatures = reindexed_signatures.reindex(template_signatures.index)
+        compare_index(reindexed_signatures, template_signatures)
+    
+    filename = f'{output_path}/{reindexed_signatures_prefix}_SBS_{context}_signatures.csv'
+    if context == 96:
+        filename = filename.replace(f'_{context}', '')
+    
+    reindexed_signatures.to_csv(filename, sep=',')
+    print(f'Saved reindexed signature table: {filename}')
 
 def process_non_sbs_signature_table(signature_table_path, mutation_type, signatures, output_path, reindexed_signatures_prefix):
     """Process non-SBS signature table."""
@@ -421,8 +410,8 @@ if __name__ == '__main__':
                        help="Dataset name to use in converted filenames")
     parser.add_argument("-t", "--mutation_types", nargs='+', dest="mutation_types", default=['SBS','DBS','ID'],
                        help="Mutation types, e.g. -t SBS DBS ID (default)")
-    parser.add_argument("-c", "--contexts", nargs='+', dest="contexts", type=int, default=[96],
-                       help="SBS contexts e.g. -c 96 288 1536 (default). Supported: 96, 192, 288, 1536, 4608")
+    parser.add_argument("-c", "--context", dest="context", type=int, default=96,
+                       help="SBS context (single int), e.g. 96 (default). Supported: 96, 192, 288, 1536, 4608")
     
     # Output and signature paths
     parser.add_argument("-o", "--output_path", dest="output_path", default='./',
@@ -461,18 +450,13 @@ if __name__ == '__main__':
             # For signature reindexing
             if len(options.mutation_types) != 1:
                 raise ValueError(f"When using specific signature file (-I with -S), please specify exactly one mutation type. Got: {options.mutation_types}")
-            if options.mutation_types[0] == 'SBS' and len(options.contexts) != 1:
-                raise ValueError(f"When using specific SBS signature file (-I with -S), please specify exactly one context. Got: {options.contexts}")
         else:
             # For mutation table conversion
             if len(options.mutation_types) != 1:
-                raise ValueError(f"When using specific mutation table file (-I), please specify exactly one mutation type. Got: {options.mutation_types}")
-            if options.mutation_types[0] == 'SBS' and len(options.contexts) != 1:
-                raise ValueError(f"When using specific SBS mutation table file (-I), please specify exactly one context. Got: {options.contexts}")
-        
+                raise ValueError(f"When using specific mutation table file (-I), please specify exactly one mutation type. Got: {options.mutation_types}")        
         print(f"Processing specific file(s) with mutation type: {options.mutation_types[0]}", end='')
         if options.mutation_types[0] == 'SBS':
-            print(f", context: {options.contexts[0]}")
+            print(f", context: {options.context}")
         else:
             print()
     
@@ -481,7 +465,7 @@ if __name__ == '__main__':
         options.signature_tables_path, 
         options.input_signatures_prefix, 
         options.mutation_types, 
-        options.contexts
+        options.context
     )
     
     # Print processing information
@@ -496,7 +480,7 @@ if __name__ == '__main__':
             print(f'Converting mutation tables for dataset {options.dataset_name} from specific files: {options.input_files}')
         else:
             print(f'Converting mutation tables for dataset {options.dataset_name} from directory: {options.input_path}')
-        print(f'Mutation types: {options.mutation_types}, SBS contexts: {options.contexts}')
+        print(f'Mutation types: {options.mutation_types}, SBS context: {options.context}')
     
     # Process files
     if options.reindex_signatures:
@@ -513,7 +497,7 @@ if __name__ == '__main__':
                     
                     # For SBS, verify the context matches the expected number of mutation types
                     if mutation_type == 'SBS':
-                        context = options.contexts[0]
+                        context = options.context
                         expected_rows = context
                         actual_rows_full = pd.read_csv(file_path, sep='\t', index_col=0).shape[0]
                         
@@ -534,7 +518,7 @@ if __name__ == '__main__':
             )
         
         process_signature_tables(
-            signature_files_by_type, signatures, options.contexts, 
+            signature_files_by_type, signatures, options.context, 
             options.output_path, options.reindexed_signatures_prefix, options.COSMIC,
             specific_files_mode=True if options.input_files else False  # Use parameters directly, don't infer from filenames
         )
@@ -554,7 +538,7 @@ if __name__ == '__main__':
                     
                     # For SBS, verify the context
                     if mutation_type == 'SBS':
-                        context = options.contexts[0]
+                        context = options.context
                         expected_rows = context
                         actual_rows_full = pd.read_csv(file_path, sep='\t', index_col=0).shape[0]
                         
@@ -575,7 +559,7 @@ if __name__ == '__main__':
         
         process_mutation_tables(
             input_files_by_type, signatures, options.dataset_name, 
-            options.output_path, options.contexts, options.use_extractor_for_mutation_tables,
+            options.output_path, options.context, options.use_extractor_for_mutation_tables,
             specific_files_mode=True if options.input_files else False  # Use parameters directly, don't infer from filenames
         )
     
