@@ -57,13 +57,13 @@ workflow convert_data_workflow {
         } else if (convert_type == 'specific_mutation_files') {
             // Handle specific mutation files - input_path should be a list of files
             """
-            ${base_cmd} -d ${dataset} ${mutation_types_arg} -с ${params.SBS_context} \\
+            ${base_cmd} -d ${dataset} ${mutation_types_arg} -c ${params.SBS_context} \\
                 -I ${input_path} ${signature_tables_arg} ${temp_output_arg}
             """
         } else if (convert_type == 'specific_signature_files') {
             // Handle specific signature files - input_path should be a list of files
             """
-            ${base_cmd} -S ${mutation_types_arg} -с ${params.SBS_context} \\
+            ${base_cmd} -S ${mutation_types_arg} -c ${params.SBS_context} \\
                 -n ${signature_prefix_arg} ${COSMIC_arg} \\
                 -I ${input_path} ${signature_tables_arg} ${temp_output_arg}
             """
