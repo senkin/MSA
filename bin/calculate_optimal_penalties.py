@@ -2,7 +2,7 @@ import argparse
 import warnings
 import pandas as pd
 import numpy as np
-from common_methods import make_folder_if_not_exists, calculate_similarity, read_data_from_JSON, write_data_to_JSON
+from common_methods import make_folder_if_not_exists, calculate_similarity, read_data_from_JSON, write_data_to_JSON, format_threshold
 
 # non-CI approach to similarity metrics
 def measure_similarity_metrics(method):
@@ -25,9 +25,8 @@ def measure_similarity_metrics(method):
     for weak_threshold in weak_thresholds:
         for strong_threshold in strong_thresholds:
             reco_table_filename = input_reco_path + '/' + dataset + '_' + \
-                str(context) + '_' + method + '_' + str(weak_threshold) + \
-                '_' + str(strong_threshold) + '/output_%s_%s_weights_table.csv' % (dataset, mutation_type)
-            # reco_table_filename = input_reco_path + '/output_tables_' + weak_threshold + '_' + strong_threshold + '/' + dataset + '/output_%s_SBS_weights_table.csv' % dataset
+                str(context) + '_' + method + '_' + format_threshold(weak_threshold) + \
+                '_' + format_threshold(strong_threshold) + '/output_%s_%s_weights_table.csv' % (dataset, mutation_type)
             reco_table = pd.read_csv(reco_table_filename, index_col=0)
 
             # remove missing sigs (some methods pre-filter input signatures)
@@ -62,8 +61,8 @@ def measure_similarity_metrics(method):
             # RSS and Chi2 for NNLS from separate stat info table
             if 'NNLS' in method:
                 stat_table_filename = input_reco_path + '/' + dataset + '_' + \
-                    str(context) + '_' + method + '_' + str(weak_threshold) + \
-                    '_' + str(strong_threshold) + '/output_%s_%s_stat_info.csv' % (dataset, mutation_type)
+                    str(context) + '_' + method + '_' + format_threshold(weak_threshold) + \
+                    '_' + format_threshold(strong_threshold) + '/output_%s_%s_stat_info.csv' % (dataset, mutation_type)
                 stat_table = pd.read_csv(stat_table_filename, index_col=0)
 
                 rss_table.loc[weak_threshold, strong_threshold] = np.mean(
@@ -291,7 +290,7 @@ if __name__ == '__main__':
 
     for weak_threshold in weak_thresholds:
         for strong_threshold in strong_thresholds:
-            input_attributions_folder = input_reco_path + '/' + dataset + '_' + str(context) + '_' + method + '_' + str(weak_threshold) + '_' + str(strong_threshold)
+            input_attributions_folder = input_reco_path + '/' + dataset + '_' + str(context) + '_' + method + '_' + format_threshold(weak_threshold) + '_' + format_threshold(strong_threshold)
 
             # sensitivity_thresholds = pd.read_csv(input_attributions_folder + '/truth_studies/sensitivity_thresholds_' + mutation_type + '.csv', index_col=0)
             # signatures_scores = read_data_from_JSON(input_attributions_folder + '/truth_studies/signatures_scores_' + mutation_type + '.json')
