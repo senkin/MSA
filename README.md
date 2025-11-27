@@ -23,7 +23,7 @@ export NXF_VER=25.04.8
 
 It is recommended to use [docker](https://www.docker.com/) or [singularity](https://sylabs.io/singularity/) profiles as these normally provide greater stability and reproducibility than [conda](https://conda.io).
 
-The pipeline should run and produce all the results automatically. You can also retrieve the code ([see below](#getting-started)) in order to adjust all the inputs and parameters. In the [run_auto_optimised_analysis.nf](run_auto_optimised_analysis.nf) file various parameters can be specified.
+The pipeline should run and produce all the results automatically. You can also retrieve the code ([see below](#getting-started)) in order to adjust all the inputs and parameters. In the [nextflow.config](nextflow.config) file various parameters can be specified.
 
 ## Running on SigProfiler output
 
@@ -91,6 +91,9 @@ The pipeline processes inputs in the following priority order:
 | --number_of_samples | -1 | Number of samples to analyse (-1 means all available) |
 | --SBS_context | 96 | SBS context to use (96, 192, 288, 1536, or 4608) |
 | --COSMIC_signatures | false | If true, use COSMIC signatures from SigProfiler output; otherwise use de-novo |
+<!-- | --signatures_to_prioritise | null | set a list of signatures to prioritise in penalty calculation (only these will be used to calculate optimal penalty) |
+| --signatures_to_deprioritise | null | set a list of signatures to deprioritise (these will be excluded in penalty calculation) |
+| --no_CI_for_penalties | false | do not use confidence intervals for optimal penalties calculation | -->
 
 ### Output structure
 
