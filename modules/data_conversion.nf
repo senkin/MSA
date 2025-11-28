@@ -26,8 +26,8 @@ workflow convert_data_workflow {
         val mutation_types_list
 
         output:
-        path '*.csv', emit: signature_files, optional: true
-        path '**/*.csv', emit: input_files, optional: true
+        path '*.csv', emit: signature_files, optional: !(convert_type in ['signature_tables', 'specific_signature_files'])
+        path '**/*.csv', emit: input_files, optional: convert_type in ['signature_tables', 'specific_signature_files']
 
         script:
         // Base command components

@@ -12,6 +12,7 @@ workflow plot_spectra_workflow {
     mutation_type
     inputs
     plot_type // 'mutation_spectra' or 'signatures'
+    conversion_done // dummy input to ensure conversion is done before plotting
 
     main:
     process plot_spectra {
