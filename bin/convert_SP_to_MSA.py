@@ -16,12 +16,75 @@ from pathlib import Path
 from argparse import ArgumentParser
 from common_methods import make_folder_if_not_exists
 
+def detect_and_read_csv(file_path, mutation_type, context):
+    """Read a CSV file with auto-detected separator and appropriate index columns.
+    
+    For tab-separated files: always use index_col=0
+    For comma-separated files: use index_col from get_index_columns()
+    
+    Args:
+        file_path: Path to the file to read
+        mutation_type: Type of mutation for determining index columns
+        context: Context level for determining index columns
+    
+    Returns:
+        pd.DataFrame: The loaded dataframe, or None if reading fails
+    """
+    try:
+        # First, try to detect separator by reading first line
+        with open(file_path, 'r') as f:
+            first_line = f.readline().strip()
+            comma_count = first_line.count(',')
+            tab_count = first_line.count('\t')
+        
+        # Determine separator and index columns
+        if tab_count > comma_count:
+            print(f"Detected tab-separated file: {file_path}")
+            # Tab-separated: always use index_col=0
+            separator = '\t'
+            index_col = 0
+        else:
+            print(f"Detected comma-separated file: {file_path}")
+            # Comma-separated: use context-appropriate index columns
+            separator = ','
+            index_col = get_index_columns(mutation_type, context)
+        
+        # Read with determined separator and index columns
+        return pd.read_csv(file_path, sep=separator, index_col=index_col)
+    
+    except Exception as e:
+        print(f"Error reading {file_path}: {e}")
+        return None
+
 def compare_index(first, second):
     """Compare indices of two dataframes and raise error if they don't match."""
     if not first.index.equals(second.index):
         print('Converted index:', first.index.to_list())
         print('Target index:', second.index.to_list())
         raise ValueError("Index mismatch, check your input data.")
+
+def get_index_columns(mutation_type, context):
+    """Determine index columns based on mutation type and context.
+    
+    Args:
+        mutation_type: Type of mutation (e.g., 'SBS', 'DBS', 'ID')
+        context: Context level (e.g., 96, 192, 288, 384, 1536, 4608)
+    
+    Returns:
+        int or list: Index column specification for pd.read_csv
+    """
+    if mutation_type == 'SBS':
+        if context == 96:
+            return [0, 1]
+        elif context in [192, 288, 384]:
+            return [0, 1, 2]
+        elif context in [1536, 4608]:
+            return 0
+        else:
+            raise ValueError(f"Unsupported context {context} for SBS mutation type.")
+    else:
+        # Non-SBS mutation types use single index
+        return 0
 
 def convert_index(input_dataframe, context=96):
     """Convert index format from SigProfiler to MSA format."""
@@ -59,21 +122,17 @@ def load_signature_templates(signature_tables_path, input_signatures_prefix, mut
     signatures = {}
     for mutation_type in mutation_types:
         if mutation_type == 'SBS':
-            if context == 96:
-                index_col = [0, 1]
-                sig_file = f'{signature_tables_path}/{input_signatures_prefix}_{mutation_type}_signatures.csv'
-            elif context in [192, 288]:
-                index_col = [0, 1, 2]
-                sig_file = f'{signature_tables_path}/{input_signatures_prefix}_{mutation_type}_{context}_signatures.csv'
-            elif context in [1536, 4608]:
-                index_col = 0
+            index_col = get_index_columns(mutation_type, context)
+            sig_file = f'{signature_tables_path}/{input_signatures_prefix}_{mutation_type}_signatures.csv'
+            if context != 96:
                 sig_file = f'{signature_tables_path}/{input_signatures_prefix}_{mutation_type}_{context}_signatures.csv'
             if os.path.exists(sig_file):
                 signatures[mutation_type + str(context)] = pd.read_csv(sig_file, sep=',', index_col=index_col)
         else:
+            index_col = 0
             sig_file = f'{signature_tables_path}/{input_signatures_prefix}_{mutation_type}_signatures.csv'
             if os.path.exists(sig_file):
-                signatures[mutation_type] = pd.read_csv(sig_file, sep=',', index_col=0)
+                signatures[mutation_type] = pd.read_csv(sig_file, sep=',', index_col=index_col)
     return signatures
 
 def find_input_files_directory(input_path, mutation_types, use_extractor_for_mutation_tables):
@@ -116,17 +175,9 @@ def is_already_converted(file_path, mutation_type, context, signatures):
     """
     try:
         # Determine index columns based on mutation type and context
-        if mutation_type == 'SBS':
-            if context == 96:
-                index_col = [0, 1]
-            elif context in [192, 288]:
-                index_col = [0, 1, 2]
-            elif context in [1536, 4608]:
-                index_col = 0
-            else:
-                return False, None
-        else:
-            index_col = 0
+        index_col = get_index_columns(mutation_type, context)
+        if index_col is None:
+            return False, None
         
         # Try reading with auto-detected separator
         full_df = pd.read_csv(file_path, sep=None, engine='python', index_col=index_col)
@@ -234,7 +285,10 @@ def process_sbs_mutation_table(file_path, mutation_type_with_context, context, s
     if context != 192 and str(context) not in mutation_type_with_context:
         return False
     try:
-        input_table = pd.read_csv(file_path, sep='\t', index_col=0)
+        input_table = detect_and_read_csv(file_path, 'SBS', context)
+        if input_table is None:
+            return False
+        
         print(f'Converting SBS context {context} from {file_path}')
         
         input_table = convert_index(input_table, context=context)
@@ -269,7 +323,9 @@ def process_non_sbs_mutation_table(file_path, mutation_type, mutation_type_with_
             return False
     try:
         print(f'Converting {mutation_type} from {file_path}')
-        input_table = pd.read_csv(file_path, sep='\t', index_col=0)
+        input_table = detect_and_read_csv(file_path, mutation_type, 0)
+        if input_table is None:
+            return False
         
         if mutation_type in signatures:
             input_table.index = signatures[mutation_type].index
@@ -364,7 +420,10 @@ def process_sbs_signature_table_with_context(signature_table_path, context, sign
     if str(context) not in signature_table_path:
         return False
     try:
-        signature_table_to_reindex = pd.read_csv(signature_table_path, sep='\t', index_col=0)
+        signature_table_to_reindex = detect_and_read_csv(signature_table_path, 'SBS', context)
+        if signature_table_to_reindex is None:
+            return False
+        
         print(f'Converting signature table {signature_table_path} (SBS, context {context})')
         
         template_context = context if not COSMIC else 96
@@ -402,7 +461,9 @@ def process_non_sbs_signature_table(signature_table_path, mutation_type, signatu
         return False
     
     try:
-        signature_table_to_reindex = pd.read_csv(signature_table_path, sep='\t', index_col=0)
+        signature_table_to_reindex = detect_and_read_csv(signature_table_path, mutation_type, context)
+        if signature_table_to_reindex is None:
+            return False
         print(f'Converting signature table {signature_table_path} ({mutation_type}, context {context})')
         
         # Simply overwrite index for non-SBS mutation types
@@ -427,7 +488,7 @@ if __name__ == '__main__':
     input_group = parser.add_mutually_exclusive_group()
     input_group.add_argument("-i", "--input_folder", dest="input_path",
                             help="Path to SigProfiler output directory (matrix generator or extractor)")
-    input_group.add_argument("-I", "--input_file", nargs='+', dest="input_file",
+    input_group.add_argument("-I", "--input_file", dest="input_file",
                             help="Specific input file to convert")
     
     # Mode selection
@@ -485,7 +546,7 @@ if __name__ == '__main__':
             # For mutation table conversion
             if len(options.mutation_types) != 1:
                 raise ValueError(f"When using specific mutation table file (-I), please specify exactly one mutation type. Got: {options.mutation_types}")        
-        print(f"Processing specific file(s) with mutation type: {options.mutation_types[0]}", end='')
+        print(f"Processing specific file with mutation type: {options.mutation_types[0]}", end='')
         if options.mutation_types[0] == 'SBS':
             print(f", context: {options.context}")
         else:
@@ -518,11 +579,13 @@ if __name__ == '__main__':
         if options.input_file:
             # Process specific signature files - use parameters directly
             mutation_type = options.mutation_types[0]
-            signature_files_by_type = {mutation_type: options.input_file}
+            signature_files_by_type = {mutation_type: [options.input_file]}
             
             # Validate that the file(s) can be read and have compatible structure
             try:
-                test_table = pd.read_csv(options.input_file, sep=None, engine='python', index_col=0)
+                test_table = detect_and_read_csv(options.input_file, mutation_type, options.context)
+                if test_table is None:
+                    raise ValueError(f"Could not read signature file {options.input_file}")
                 print(f"Successfully read signature file: {options.input_file} (detected {test_table.shape[1]} signatures)")
                 
                 # For SBS, verify the context matches the expected number of mutation types
@@ -557,18 +620,20 @@ if __name__ == '__main__':
         if options.input_file:
             # Process specific mutation files - use parameters directly
             mutation_type = options.mutation_types[0]
-            input_files_by_type = {mutation_type: options.input_file}
+            input_files_by_type = {mutation_type: [options.input_file]}
             
             # Validate that the file can be read and has compatible structure
             try:
-                test_table = pd.read_csv(options.input_file, sep=None, engine='python', index_col=0)
+                test_table = detect_and_read_csv(options.input_file, mutation_type, options.context)
+                if test_table is None:
+                    raise ValueError(f"Could not read mutation table file {options.input_file}")
                 print(f"Successfully read mutation table: {options.input_file} (detected {test_table.shape[1]} samples)")
                 
                 # For SBS, verify the context
                 if mutation_type == 'SBS':
                     context = options.context
                     expected_rows = context
-                    actual_rows_full = pd.read_csv(options.input_file, sep='\t', index_col=0).shape[0]
+                    actual_rows_full = test_table.shape[0]
                     
                     # For 192 context, input might be 384
                     if context == 192 and actual_rows_full == 384:
