@@ -89,6 +89,7 @@ def get_index_columns(mutation_type, context):
 def convert_index(input_dataframe, context=96):
     """Convert index format from SigProfiler to MSA format."""
     input_table = copy.deepcopy(input_dataframe)
+    print(f'Converting index for context: {context}')
     
     if context == 96:
         input_table = input_table.sort_index(level=0)
@@ -280,13 +281,16 @@ def process_mutation_tables(input_files_by_type, signatures, dataset_name, outpu
 
 def process_sbs_mutation_table(file_path, mutation_type_with_context, context, signatures, dataset_name, output_path):
     """Process SBS mutation table."""
-    if context == 192 and ('384' not in mutation_type_with_context or '192' not in mutation_type_with_context):
+    if context == 192 and ('384' not in mutation_type_with_context and '192' not in mutation_type_with_context):
+        print(f'Skipping file {file_path} as context 192/384 not in {mutation_type_with_context}')
         return False
     if context != 192 and str(context) not in mutation_type_with_context:
+        print(f'Skipping file {file_path} as context {context} not in {mutation_type_with_context}')
         return False
     try:
         input_table = detect_and_read_csv(file_path, 'SBS', context)
         if input_table is None:
+            print(f'Failed to read SBS mutation table from {file_path}')
             return False
         
         print(f'Converting SBS context {context} from {file_path}')
@@ -325,6 +329,7 @@ def process_non_sbs_mutation_table(file_path, mutation_type, mutation_type_with_
         print(f'Converting {mutation_type} from {file_path}')
         input_table = detect_and_read_csv(file_path, mutation_type, 0)
         if input_table is None:
+            print(f'Failed to read {mutation_type} mutation table from {file_path}')
             return False
         
         if mutation_type in signatures:
