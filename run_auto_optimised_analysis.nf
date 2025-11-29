@@ -164,7 +164,7 @@ workflow {
         
         if (params.plot_signatures) {
             for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, params.signature_tables, 'signatures')
+                plot_spectra_workflow(params.dataset, mutation_type, params.signature_tables, 'signatures', signature_files_channel)
             }
         }
     }
@@ -207,7 +207,7 @@ workflow {
         
         if (params.plot_input_spectra) {
             for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, params.input_tables, 'mutation_spectra')
+                plot_spectra_workflow(params.dataset, mutation_type, params.input_tables, 'mutation_spectra', input_files_channel)
             }
         }
     }
