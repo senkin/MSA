@@ -155,7 +155,8 @@ workflow {
         
         if (params.plot_signatures) {
             for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/signature_tables", 'signatures', convert_data_workflow.out.signature_files.collect())            }
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/signature_tables", 'signatures', convert_data_workflow.out.signature_files.collect())
+                }
         }
     } else {
         // Use default signature tables
@@ -197,7 +198,7 @@ workflow {
         
         if (params.plot_input_spectra) {
             for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/input_tables", 'mutation_spectra')
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/input_tables", 'mutation_spectra', input_files_channel.collect())
             }
         }
     } else {
@@ -207,7 +208,7 @@ workflow {
         
         if (params.plot_input_spectra) {
             for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, params.input_tables, 'mutation_spectra', input_files_channel)
+                plot_spectra_workflow(params.dataset, mutation_type, params.input_tables, 'mutation_spectra', input_files_channel.collect())
             }
         }
     }
