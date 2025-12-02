@@ -14,7 +14,7 @@ workflow convert_data_workflow {
         
         // Use temp_path for all converted outputs
         publishDir (
-            convert_type.contains('signature') ? "${params.temp_path}/signature_tables" : "${params.temp_path}/input_tables",
+            convert_type.contains('signature') ? "${params.output_path}/temp/signature_tables" : "${params.output_path}/temp/input_tables",
             mode: 'copy',
             overwrite: true
         )

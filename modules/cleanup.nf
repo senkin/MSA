@@ -13,11 +13,10 @@ process cleanup_temp_files {
     script:
     """
     echo "Cleaning up temporary files..."
-    rm -rf ${params.temp_path}
     rm -rf ${params.output_path}/temp
     rm -rf ${params.output_path}/outputs_optimisation/*_NNLS_*
-    rm -rf ${params.tables_output_path}/*/*json
-    rm -rf ${params.tables_output_path}/*/bootstrap_output
+    rm -rf ${params.output_path}/output_tables/*/*json
+    rm -rf ${params.output_path}/output_tables/*/bootstrap_output
     echo "Cleanup complete."
     """
 }

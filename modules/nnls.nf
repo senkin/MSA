@@ -12,7 +12,7 @@ workflow NNLS_unoptimized_workflow {
     // Unoptimized NNLS process
     process run_unoptimized_NNLS {
         tag "${mutation_type}/${dataset}"
-        publishDir "${params.temp_path}/output_tables_unoptimised", mode: 'copy', overwrite: true, saveAs: { filename -> "${dataset}/${filename}" }
+        publishDir "${params.output_path}/temp/output_tables_unoptimised", mode: 'copy', overwrite: true, saveAs: { filename -> "${dataset}/${filename}" }
         
         input:
         val dataset
@@ -31,10 +31,10 @@ workflow NNLS_unoptimized_workflow {
         script:
         def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
         """
-        mkdir -p ${params.temp_path}
-        cp -a ${params.signature_tables} ${params.temp_path}
+        mkdir -p ${params.output_path}/temp
+        cp -a ${params.signature_tables} ${params.output_path}/temp
         python ${workflow.projectDir}/bin/run_NNLS.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} \\
-            -p ${signature_prefix} -i ${params.temp_path}/input_tables -s ${params.temp_path}/signature_tables -o "./" \\
+            -p ${signature_prefix} -i ${params.output_path}/temp/input_tables -s ${params.output_path}/temp/signature_tables -o "./" \\
             -n ${params.number_of_samples}
         """
     }
@@ -70,7 +70,7 @@ workflow NNLS_optimized_workflow {
     // Optimized NNLS process
     process run_optimized_NNLS {
         tag "${mutation_type}/${dataset}/${weak_threshold}/${strong_threshold}"
-        publishDir "${params.optimisation_NNLS_output_path}", mode: 'copy', overwrite: true
+        publishDir "${params.output_path}/outputs_optimisation", mode: 'copy', overwrite: true
         
         input:
         val dataset
@@ -95,28 +95,28 @@ workflow NNLS_optimized_workflow {
         def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
         """
         # Create output directory
-        mkdir -p ${params.optimisation_NNLS_output_path}/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}
+        mkdir -p ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}
         
         # Copy the appropriate simulated dataset based on mutation type
         if [[ ${mutation_type} == "SBS" ]]; then
-            cp ${params.temp_path}/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.${params.SBS_context}.weights.csv \\
-               ${params.optimisation_NNLS_output_path}/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
+            cp ${params.output_path}/temp/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.${params.SBS_context}.weights.csv \\
+               ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
         elif [[ ${mutation_type} == "DBS" ]]; then
-            cp ${params.temp_path}/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.dinucs.weights.csv \\
-               ${params.optimisation_NNLS_output_path}/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
+            cp ${params.output_path}/temp/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.dinucs.weights.csv \\
+               ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
         elif [[ ${mutation_type} == "ID" ]]; then
-            cp ${params.temp_path}/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.indels.weights.csv \\
-               ${params.optimisation_NNLS_output_path}/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
+            cp ${params.output_path}/temp/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.indels.weights.csv \\
+               ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
         elif [[ ${mutation_type} == "SV" || ${mutation_type} == "CNV" ]]; then
-            cp ${params.temp_path}/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.${mutation_type}.weights.csv \\
-               ${params.optimisation_NNLS_output_path}/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
+            cp ${params.output_path}/temp/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.${mutation_type}.weights.csv \\
+               ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
         fi
         
         # Run NNLS analysis
         python ${workflow.projectDir}/bin/run_NNLS.py -d SIM_${dataset} -t ${mutation_type} -c ${params.SBS_context} \\
             -p ${signature_prefix} --optimisation_strategy ${params.optimisation_strategy} \\
             -W ${weak_threshold} -S ${strong_threshold} \\
-            -i ${params.temp_path}/output_tables -s ${params.temp_path}/signature_tables \\
+            -i ${params.output_path}/temp/output_tables -s ${params.output_path}/temp/signature_tables \\
             -o "./" -x --add_suffix
         """
     }
@@ -155,7 +155,7 @@ workflow NNLS_bootstrap_workflow {
     // Bootstrap NNLS process - runs once per bootstrap sample
     process run_bootstrap_NNLS {
         tag "${mutation_type}/${dataset}/${bootstrap_index}"
-        publishDir "${params.optimisation_NNLS_output_path}"
+        publishDir "${params.output_path}/outputs_optimisation"
         
         input:
         val dataset
@@ -179,21 +179,21 @@ workflow NNLS_bootstrap_workflow {
         def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
         """
         # Create output directory
-        mkdir -p ${params.optimisation_NNLS_output_path}/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}
+        mkdir -p ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}
         
         # Copy the appropriate simulated dataset based on mutation type
         if [[ ${mutation_type} == "SBS" ]]; then
-            cp ${params.temp_path}/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.${params.SBS_context}.weights.csv \\
-               ${params.optimisation_NNLS_output_path}/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
+            cp ${params.output_path}/temp/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.${params.SBS_context}.weights.csv \\
+               ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
         elif [[ ${mutation_type} == "DBS" ]]; then
-            cp ${params.temp_path}/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.dinucs.weights.csv \\
-               ${params.optimisation_NNLS_output_path}/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
+            cp ${params.output_path}/temp/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.dinucs.weights.csv \\
+               ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
         elif [[ ${mutation_type} == "ID" ]]; then
-            cp ${params.temp_path}/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.indels.weights.csv \\
-               ${params.optimisation_NNLS_output_path}/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
+            cp ${params.output_path}/temp/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.indels.weights.csv \\
+               ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
         elif [[ ${mutation_type} == "SV" || ${mutation_type} == "CNV" ]]; then
-            cp ${params.temp_path}/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.${mutation_type}.weights.csv \\
-               ${params.optimisation_NNLS_output_path}/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
+            cp ${params.output_path}/temp/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.${mutation_type}.weights.csv \\
+               ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
         fi
         
         # Run bootstrap NNLS analysis
@@ -201,7 +201,7 @@ workflow NNLS_bootstrap_workflow {
             --optimisation_strategy ${params.optimisation_strategy} \\
             --bootstrap_method ${params.bootstrap_method} \\
             -W ${weak_threshold} -S ${strong_threshold} --add_suffix \\
-            -p ${signature_prefix} -i ${params.temp_path}/output_tables -s ${params.temp_path}/signature_tables -o "./"
+            -p ${signature_prefix} -i ${params.output_path}/temp/output_tables -s ${params.output_path}/temp/signature_tables -o "./"
         
         # Create bootstrap output directory and move files
         mkdir -p SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output
@@ -252,7 +252,7 @@ workflow FINAL_NNLS_workflow {
     // Simple final NNLS process using penalty files directly
     process run_final_NNLS {
         tag "${mutation_type}/${dataset}"
-        publishDir "${params.tables_output_path}", mode: 'copy', overwrite: true
+        publishDir "${params.output_path}/output_tables", mode: 'copy', overwrite: true
         
         input:
         tuple val(dataset), val(mutation_type)
@@ -279,11 +279,11 @@ workflow FINAL_NNLS_workflow {
         python ${workflow.projectDir}/bin/run_NNLS.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \\
             --optimisation_strategy ${params.optimisation_strategy} \\
             -W `< ${weak_penalty}` -S `< ${strong_penalty}` -n ${params.number_of_samples} \\
-            -p ${signature_prefix} -i ${params.temp_path}/input_tables -s ${params.temp_path}/signature_tables -o "./"
+            -p ${signature_prefix} -i ${params.output_path}/temp/input_tables -s ${params.output_path}/temp/signature_tables -o "./"
         
         # Copy residuals and fitted values back to input tables
-        cp ${dataset}/output_${dataset}_${mutation_type}_residuals.csv ${params.temp_path}/input_tables/${dataset}/
-        cp ${dataset}/output_${dataset}_${mutation_type}_fitted_values.csv ${params.temp_path}/input_tables/${dataset}/
+        cp ${dataset}/output_${dataset}_${mutation_type}_residuals.csv ${params.output_path}/temp/input_tables/${dataset}/
+        cp ${dataset}/output_${dataset}_${mutation_type}_fitted_values.csv ${params.output_path}/temp/input_tables/${dataset}/
         """
     }
     
@@ -318,7 +318,7 @@ workflow FINAL_NNLS_BOOTSTRAP_workflow {
     // Simple bootstrap process using penalty files directly
     process run_final_bootstrap_NNLS {
         tag "${mutation_type}/${dataset}/${bootstrap_index}"
-        publishDir "${params.tables_output_path}", mode: 'copy', overwrite: true
+        publishDir "${params.output_path}/output_tables", mode: 'copy', overwrite: true
         
         input:
         tuple val(dataset), val(mutation_type)
@@ -344,7 +344,7 @@ workflow FINAL_NNLS_BOOTSTRAP_workflow {
         python ${workflow.projectDir}/bin/run_NNLS.py -B -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \\
             --optimisation_strategy ${params.optimisation_strategy} --bootstrap_method ${params.bootstrap_method} \\
             -W `< ${weak_penalty}` -S `< ${strong_penalty}` -n ${params.number_of_samples} \\
-            -p ${signature_prefix} -i ${params.temp_path}/input_tables -s ${params.temp_path}/signature_tables -o "./"
+            -p ${signature_prefix} -i ${params.output_path}/temp/input_tables -s ${params.output_path}/temp/signature_tables -o "./"
         
         mkdir -p ${dataset}/bootstrap_output
         mv ${dataset}/output_${dataset}_${mutation_type}_mutations_table.csv ${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_${bootstrap_index}_mutations_table.csv

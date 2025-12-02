@@ -141,27 +141,27 @@ workflow {
     if (params.signatures_file) {
         // Convert specific signature file
         convert_data_workflow(params.dataset, file(params.signatures_file).toAbsolutePath(), 'specific_signature_files', mutation_types)
-        signature_files_channel = convert_data_workflow.out.signature_files
+        signature_files_channel = convert_data_workflow.out.signature_files.collect()
         
         if (params.plot_signatures) {
             for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/signature_tables", 'signatures', convert_data_workflow.out.signature_files.collect())
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.output_path}/temp/signature_tables", 'signatures', signature_files_channel)
             }
         }
     } else if (params.SP_extractor_output_path) {
         // Convert SigProfiler extractor output to temp location
         convert_data_workflow(params.dataset, params.SP_extractor_output_path, 'signature_tables', mutation_types)
-        signature_files_channel = convert_data_workflow.out.signature_files
+        signature_files_channel = convert_data_workflow.out.signature_files.collect()
         
         if (params.plot_signatures) {
             for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/signature_tables", 'signatures', convert_data_workflow.out.signature_files.collect())
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.output_path}/temp/signature_tables", 'signatures', signature_files_channel)
                 }
         }
     } else {
         // Use default signature tables
         stage_default_signatures_workflow()
-        signature_files_channel = stage_default_signatures_workflow.out.staged_signature_tables
+        signature_files_channel = stage_default_signatures_workflow.out.staged_signature_tables.collect()
         
         if (params.plot_signatures) {
             for (mutation_type in mutation_types) {
@@ -174,37 +174,37 @@ workflow {
     if (params.input_mutation_table) {
         // Convert specific mutation table file
         convert_data_workflow(params.dataset, file(params.input_mutation_table).toAbsolutePath(), 'specific_mutation_files', mutation_types)
-        input_files_channel = convert_data_workflow.out.input_files
+        input_files_channel = convert_data_workflow.out.input_files.collect()
         
         if (params.plot_input_spectra) {
             for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/input_tables", 'mutation_spectra', convert_data_workflow.out.input_files.collect())
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.output_path}/temp/input_tables", 'mutation_spectra', input_files_channel)
             }
         }
     } else if (params.SP_extractor_output_path && !params.SP_matrix_generator_output_path) {
         // Convert extractor matrices to temp location
         convert_data_workflow(params.dataset, params.SP_extractor_output_path, 'extractor_matrices', mutation_types)
-        input_files_channel = convert_data_workflow.out.input_files
+        input_files_channel = convert_data_workflow.out.input_files.collect()
         
         if (params.plot_input_spectra) {
             for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/input_tables", 'mutation_spectra', convert_data_workflow.out.input_files.collect())
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.output_path}/temp/input_tables", 'mutation_spectra', input_files_channel)
             }
         }
     } else if (params.SP_matrix_generator_output_path) {
         // Convert matrix generator output to temp location
         convert_data_workflow(params.dataset, params.SP_matrix_generator_output_path, 'matrix_generator_matrices', mutation_types)
-        input_files_channel = convert_data_workflow.out.input_files
+        input_files_channel = convert_data_workflow.out.input_files.collect()
         
         if (params.plot_input_spectra) {
             for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/input_tables", 'mutation_spectra', input_files_channel.collect())
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.output_path}/temp/input_tables", 'mutation_spectra', input_files_channel)
             }
         }
     } else {
         // Use default input tables - collect them into a channel
         stage_default_inputs_workflow(params.dataset)
-        input_files_channel = stage_default_inputs_workflow.out.staged_input_tables
+        input_files_channel = stage_default_inputs_workflow.out.staged_input_tables.collect()
         
         if (params.plot_input_spectra) {
             for (mutation_type in mutation_types) {
@@ -212,6 +212,7 @@ workflow {
             }
         }
     }
+    def all_plot_outputs = []
 
     // Process each mutation type sequentially to avoid channel conflicts
     for (mutation_type in mutation_types) {
@@ -320,14 +321,15 @@ workflow {
             FINAL_BOOTSTRAP_TABLES_workflow.out.attributions_per_sample,
             FINAL_BOOTSTRAP_TABLES_workflow.out.signature_prevalences
         )
+        all_plot_outputs.add(ALL_FINAL_PLOTS_workflow.out.bootstrap_plots)
+        all_plot_outputs.add(ALL_FINAL_PLOTS_workflow.out.metrics_plots)
+        all_plot_outputs.add(ALL_FINAL_PLOTS_workflow.out.fitted_plots)
+        all_plot_outputs.add(ALL_FINAL_PLOTS_workflow.out.residuals_plots)
     }
     // Cleanup temporary files if specified
     if (params.cleanup_temp) {
-        all_plots_done = ALL_FINAL_PLOTS_workflow.out.bootstrap_plots
-            .mix(ALL_FINAL_PLOTS_workflow.out.metrics_plots)
-            .mix(ALL_FINAL_PLOTS_workflow.out.fitted_plots)
-            .mix(ALL_FINAL_PLOTS_workflow.out.residuals_plots)
-            .collect()
+        // Combine all accumulated channels
+        all_plots_done = Channel.empty().mix(*all_plot_outputs).collect()
         cleanup_workflow(all_plots_done)
     }
 }

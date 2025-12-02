@@ -11,7 +11,7 @@ workflow OPTIMAL_PENALTIES_workflow {
     // Process to calculate optimal penalties
     process calculate_optimal_penalties {
         tag "${mutation_type}/${dataset}"
-        publishDir "${params.optimisation_NNLS_output_path}", mode: 'copy', overwrite: true
+        publishDir "${params.output_path}/outputs_optimisation", mode: 'copy', overwrite: true
         
         input:
         path '*.csv'
@@ -38,8 +38,8 @@ workflow OPTIMAL_PENALTIES_workflow {
         
         """
         python ${workflow.projectDir}/bin/calculate_optimal_penalties.py -d SIM_${dataset} -t ${mutation_type} \\
-            -I ${params.temp_path}/output_tables/SIM_${dataset} \\
-            -i ${params.optimisation_NNLS_output_path} -o "./" \\
+            -I ${params.output_path}/temp/output_tables/SIM_${dataset} \\
+            -i ${params.output_path}/outputs_optimisation -o "./" \\
             -c ${params.SBS_context} \\
             ${no_CI_for_penalties_flag} \\
             ${calculate_penalty_on_average_flag} \\
@@ -49,7 +49,7 @@ workflow OPTIMAL_PENALTIES_workflow {
             -T ${params.metric_threshold} \\
             -W ${weak_thresholds_list.join(' ')} \\
             -S ${strong_thresholds_list.join(' ')} \\
-            --signature_path ${params.temp_path}/signature_tables \\
+            --signature_path ${params.output_path}/temp/signature_tables \\
             -p ${signature_prefix}
         """
     }
