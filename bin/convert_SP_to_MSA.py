@@ -422,8 +422,6 @@ def process_sbs_signature_table_with_context(signature_table_path, context, sign
     Returns:
         bool: True if processing was successful, False otherwise.
     """
-    if str(context) not in signature_table_path:
-        return False
     try:
         signature_table_to_reindex = detect_and_read_csv(signature_table_path, 'SBS', context)
         if signature_table_to_reindex is None:
@@ -461,10 +459,6 @@ def process_non_sbs_signature_table(signature_table_path, mutation_type, signatu
     """
     context_mapping = {'DBS': 78, 'ID': 83, 'SV': 32, 'CNV': 48}
     context = context_mapping.get(mutation_type)
-    
-    if context and str(context) not in signature_table_path:
-        return False
-    
     try:
         signature_table_to_reindex = detect_and_read_csv(signature_table_path, mutation_type, context)
         if signature_table_to_reindex is None:
