@@ -11,10 +11,10 @@ workflow OPTIMAL_PENALTIES_workflow {
     // Process to calculate optimal penalties
     process calculate_optimal_penalties {
         tag "${mutation_type}/${dataset}"
-        publishDir "${params.optimisation_NNLS_output_path}"
+        publishDir "${params.output_path}/outputs_optimisation", mode: 'copy', overwrite: true
         
         input:
-        path '*.csv'  // This mimics the DSL1 file ('*.csv') pattern
+        path '*.csv'
         tuple val(dataset), val(mutation_type)
         val weak_thresholds_list
         val strong_thresholds_list
@@ -33,21 +33,23 @@ workflow OPTIMAL_PENALTIES_workflow {
         def no_CI_for_penalties_flag = params.no_CI_for_penalties ? "--no_CI" : ""
         def calculate_penalty_on_average_flag = params.calculate_penalty_on_average ? "--average" : ""
         def prioritised_signatures_flag = params.signatures_to_prioritise ? "--signatures_to_prioritise " + params.signatures_to_prioritise.join(' ') : ''
+        def deprioritised_signatures_flag = params.signatures_to_deprioritise ? "--signatures_to_deprioritise " + params.signatures_to_deprioritise.join(' ') : ''
         def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
         
         """
         python ${workflow.projectDir}/bin/calculate_optimal_penalties.py -d SIM_${dataset} -t ${mutation_type} \\
-            -I ${params.temp_path}/output_tables/SIM_${dataset} \\
-            -i ${params.optimisation_NNLS_output_path} -o "./" \\
+            -I ${params.output_path}/temp/output_tables/SIM_${dataset} \\
+            -i ${params.output_path}/outputs_optimisation -o "./" \\
             -c ${params.SBS_context} \\
             ${no_CI_for_penalties_flag} \\
             ${calculate_penalty_on_average_flag} \\
             ${prioritised_signatures_flag} \\
+            ${deprioritised_signatures_flag} \\
             -M ${params.metric_to_prioritise} \\
             -T ${params.metric_threshold} \\
             -W ${weak_thresholds_list.join(' ')} \\
             -S ${strong_thresholds_list.join(' ')} \\
-            --signature_path ${params.temp_path}/signature_tables \\
+            --signature_path ${params.output_path}/temp/signature_tables \\
             -p ${signature_prefix}
         """
     }

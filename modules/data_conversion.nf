@@ -14,7 +14,7 @@ workflow convert_data_workflow {
         
         // Use temp_path for all converted outputs
         publishDir (
-            convert_type.contains('signature') ? "${params.temp_path}/signature_tables" : "${params.temp_path}/input_tables",
+            convert_type.contains('signature') ? "${params.output_path}/temp/signature_tables" : "${params.output_path}/temp/input_tables",
             mode: 'copy',
             overwrite: true
         )
@@ -26,8 +26,8 @@ workflow convert_data_workflow {
         val mutation_types_list
 
         output:
-        path '*.csv', emit: signature_files, optional: true
-        path '**/*.csv', emit: input_files, optional: true
+        path '*.csv', emit: signature_files, optional: !(convert_type in ['signature_tables', 'specific_signature_files'])
+        path '**/*.csv', emit: input_files, optional: convert_type in ['signature_tables', 'specific_signature_files']
 
         script:
         // Base command components
@@ -57,13 +57,13 @@ workflow convert_data_workflow {
         } else if (convert_type == 'specific_mutation_files') {
             // Handle specific mutation files - input_path should be a list of files
             """
-            ${base_cmd} -d ${dataset} ${mutation_types_arg} \\
+            ${base_cmd} -d ${dataset} ${mutation_types_arg} -c ${params.SBS_context} \\
                 -I ${input_path} ${signature_tables_arg} ${temp_output_arg}
             """
         } else if (convert_type == 'specific_signature_files') {
             // Handle specific signature files - input_path should be a list of files
             """
-            ${base_cmd} -S ${mutation_types_arg} \\
+            ${base_cmd} -S ${mutation_types_arg} -c ${params.SBS_context} \\
                 -n ${signature_prefix_arg} ${COSMIC_arg} \\
                 -I ${input_path} ${signature_tables_arg} ${temp_output_arg}
             """

@@ -198,7 +198,6 @@ def make_spectrum_plot(data, mutation_type='SBS', title='', y_label='', show_err
         mutation_dict = normalise_mutations(mutation_dict)
 
     f, axes = plt.subplots(1, len(categories), sharey=True, figsize=(20, 3))
-    f.suptitle(title, fontsize=14, y=0.88)
 
     for category, axis, colour in zip(categories, axes, colours):
         if strand_bias:
@@ -249,6 +248,9 @@ def make_spectrum_plot(data, mutation_type='SBS', title='', y_label='', show_err
     else:
         f.set_tight_layout(True)
 
+    f.suptitle(title, fontsize=14, y=0.95)
+    f.subplots_adjust(top=0.72)
+    
     # handling the ticks
     plt.minorticks_off()
     # for ax in axes:
@@ -261,7 +263,9 @@ def make_spectrum_plot(data, mutation_type='SBS', title='', y_label='', show_err
     # additional subtitles for indels
     if mutation_type=='ID':
         # leave more space at the top to accomodate the additional titles
-        f.subplots_adjust(top=0.72)
+
+        # Force Matplotlib to compute real layout
+        f.canvas.draw()
 
         # save the axes bounding boxes for later use
         ext = []
@@ -283,16 +287,16 @@ def make_spectrum_plot(data, mutation_type='SBS', title='', y_label='', show_err
 
         # set column spanning title
         # the first two arguments to figtext are x and y coordinates in the figure system (0 to 1)
-        plt.figtext(first_del_center[0],0.88,"1 bp deletion", va="center", ha="center", size=13)
-        plt.figtext(first_del_center[0],0.05,"Homopolymer length", va="center", ha="center", size=13)
-        plt.figtext(first_ins_center[0],0.88,"1 bp insertion", va="center", ha="center", size=13)
-        plt.figtext(first_ins_center[0],0.05,"Homopolymer length", va="center", ha="center", size=13)
-        plt.figtext(second_del_center[0],0.88,"$>$1bp deletions at repeats \n (Deletion length)", va="center", ha="center", size=13)
-        plt.figtext(second_del_center[0],0.05,"Number of repeat units", va="center", ha="center", size=13)
-        plt.figtext(second_ins_center[0],0.88,"$>$1bp insertions at repeats \n (Insertion length)", va="center", ha="center", size=13)
-        plt.figtext(second_ins_center[0],0.05,"Number of repeat units", va="center", ha="center", size=13)
-        plt.figtext(MH_del_center[0],0.88,"Deletions with microhomology \n (Deletion length)", va="center", ha="center", size=13)
-        plt.figtext(MH_del_center[0],0.05,"Microhomology length", va="center", ha="center", size=13)
+        plt.figtext(first_del_center[0],0.9,"1 bp deletion", va="center", ha="center", size=13)
+        plt.figtext(first_del_center[0],0.03,"Homopolymer length", va="center", ha="center", size=13)
+        plt.figtext(first_ins_center[0],0.9,"1 bp insertion", va="center", ha="center", size=13)
+        plt.figtext(first_ins_center[0],0.03,"Homopolymer length", va="center", ha="center", size=13)
+        plt.figtext(second_del_center[0],0.9,"$>$1bp deletions at repeats \n (Deletion length)", va="center", ha="center", size=13)
+        plt.figtext(second_del_center[0],0.03,"Number of repeat units", va="center", ha="center", size=13)
+        plt.figtext(second_ins_center[0],0.9,"$>$1bp insertions at repeats \n (Insertion length)", va="center", ha="center", size=13)
+        plt.figtext(second_ins_center[0],0.03,"Number of repeat units", va="center", ha="center", size=13)
+        plt.figtext(MH_del_center[0],0.9,"Deletions with microhomology \n (Deletion length)", va="center", ha="center", size=13)
+        plt.figtext(MH_del_center[0],0.03,"Microhomology length", va="center", ha="center", size=13)
 
     plt.savefig(savepath, transparent=True)
     plt.close()
@@ -303,7 +307,7 @@ def plot_residuals(input_array, title = '', savepath = './test_gaus.pdf'):
     fig = plt.figure()
     ax = fig.add_subplot(111)
 
-    n, bins, patches = plt.hist(input_array, normed=True, bins=50, color='blue', histtype='step')
+    n, bins, patches = plt.hist(input_array, density=True, bins=50, color='blue', histtype='step')
     # fit a Gaussian to input distribution
     (mu, sigma) = stats.norm.fit(input_array)
     y = stats.norm.pdf( bins, mu, sigma)
@@ -411,23 +415,23 @@ if __name__ == '__main__':
             raise ValueError("Context %i is not supported." % context)
 
     if args.plot_fitted_spectra:
-        input_spectra = pd.read_csv('%s/%s/output_%s_%s_fitted_values.csv' % (input_folder, dataset_name, dataset_name, mutation_type), sep=None, index_col=index_col)
+        input_spectra = pd.read_csv('%s/%s/output_%s_%s_fitted_values.csv' % (input_folder, dataset_name, dataset_name, mutation_type), sep=',', index_col=index_col)
     elif args.plot_residuals:
-        input_spectra = pd.read_csv('%s/%s/output_%s_%s_residuals.csv' % (input_folder, dataset_name, dataset_name, mutation_type), sep=None, index_col=index_col)
+        input_spectra = pd.read_csv('%s/%s/output_%s_%s_residuals.csv' % (input_folder, dataset_name, dataset_name, mutation_type), sep=',', index_col=index_col)
     elif args.plot_signatures:
         if mutation_type=='SBS' and context!=96:
-            input_spectra = pd.read_csv('%s/%s_%s_%i_signatures.csv' % (signature_tables_path, signatures_prefix, mutation_type, context), sep=None, index_col=index_col)
+            input_spectra = pd.read_csv('%s/%s_%s_%i_signatures.csv' % (signature_tables_path, signatures_prefix, mutation_type, context), sep=',', index_col=index_col)
         else:
-            input_spectra = pd.read_csv('%s/%s_%s_signatures.csv' % (signature_tables_path, signatures_prefix, mutation_type), sep=None, index_col=index_col)
+            input_spectra = pd.read_csv('%s/%s_%s_signatures.csv' % (signature_tables_path, signatures_prefix, mutation_type), sep=',', index_col=index_col)
     else:
         if mutation_type=='SBS':
-            input_spectra = pd.read_csv('%s/%s/WGS_%s.%i.csv' % (input_folder, dataset_name, dataset_name, context), sep=None, index_col=index_col)
+            input_spectra = pd.read_csv('%s/%s/WGS_%s.%i.csv' % (input_folder, dataset_name, dataset_name, context), sep=',', index_col=index_col)
         elif mutation_type=='DBS':
-            input_spectra = pd.read_csv('%s/%s/WGS_%s.dinucs.csv' % (input_folder, dataset_name, dataset_name), sep=None, index_col=index_col)
+            input_spectra = pd.read_csv('%s/%s/WGS_%s.dinucs.csv' % (input_folder, dataset_name, dataset_name), sep=',', index_col=index_col)
         elif mutation_type=='ID':
-            input_spectra = pd.read_csv('%s/%s/WGS_%s.indels.csv' % (input_folder, dataset_name, dataset_name), sep=None, index_col=index_col)
+            input_spectra = pd.read_csv('%s/%s/WGS_%s.indels.csv' % (input_folder, dataset_name, dataset_name), sep=',', index_col=index_col)
         else: # SV and CNV
-            input_spectra = pd.read_csv('%s/%s/WGS_%s.%s.csv' % (input_folder, dataset_name, dataset_name, mutation_type), sep=None, index_col=index_col)
+            input_spectra = pd.read_csv('%s/%s/WGS_%s.%s.csv' % (input_folder, dataset_name, dataset_name, mutation_type), sep=',', index_col=index_col)
 
     if args.strand_bias:
         strand_bias_subfolder = 'TSB'

@@ -13,7 +13,7 @@ workflow simulate_data_workflow {
     main:
     process simulate_data {
         tag "${dataset}_${mutation_type}"
-        publishDir "${params.temp_path}/output_tables", mode: 'copy', overwrite: true
+        publishDir "${params.output_path}/temp/output_tables", mode: 'copy', overwrite: true
 
         input:
         tuple val(dataset), val(mutation_type)
@@ -38,7 +38,7 @@ workflow simulate_data_workflow {
             -Z ${params.noise_stdev} \
             --zero_inflation_threshold ${params.zero_inflation_threshold} \
             -i ${mutations_table} \
-            -s ${params.temp_path}/signature_tables \
+            -s ${params.output_path}/temp/signature_tables \
             -o "./"
         """
     }

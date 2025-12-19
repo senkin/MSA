@@ -27,9 +27,11 @@ def plot_bootstrap_attribution_histograms(input_table, centrals, title, savepath
         bins = None
 
     for column in table.columns:
-        color = next(ax._get_lines.prop_cycler)['color']
-        plt.hist(table[column].to_list(), label = column, bins = bins, histtype='step', color=color, density=True)
-        plt.axvline(x=centrals[column], color=color, ls = '--')
+        # hist returns (n, bins, patches)
+        n, bins, patches = plt.hist(table[column].to_list(), label=column, bins=bins, 
+                                    histtype='step', density=True)
+        color = patches[0].get_edgecolor()  # Get edge color for 'step' histograms
+        plt.axvline(x=centrals[column], color=color, ls='--')
 
     legend = plt.legend()
     plt.gca().add_artist(legend)
@@ -211,7 +213,7 @@ if __name__ == '__main__':
             if signature not in truth_attribution_table.columns:
                 truth_attribution_table[signature] = 0
 
-    main_title = dataset_name.replace('_','/') + ' data, ' + mutation_type + ' mutation type'
+    main_title = dataset_name.replace('_','/') + ', ' + mutation_type
 
     # samples and metrics to consider
     samples = central_attribution_table.index.to_list()
@@ -265,7 +267,7 @@ if __name__ == '__main__':
         # make sample-based plots with signature attributions as histograms
         plot_bootstrap_attribution_histograms(attributions_per_sample_dict[sample],
             centrals = central_attribution_table.loc[sample].to_dict(),
-            title = main_title + ': sample ' + sample.replace("_", "-"),
+            title = main_title + ': ' + sample.replace("_", "-"),
             savepath = output_folder + '/sample_based/histograms/' + savepath_filename + '_' + sample + '_dist.pdf')
 
     # make bootstrap attribution plots for each signature
@@ -276,7 +278,7 @@ if __name__ == '__main__':
                 continue
         make_bootstrap_attribution_boxplot(attributions_per_signature_dict[signature],
             centrals = central_attribution_table[signature].to_dict(),
-            title = main_title + ': signature ' + signature.replace("_", "-"),
+            title = main_title + ': ' + signature.replace("_", "-"),
             truth = truth_attribution_table[signature].to_dict() if 'SIM' in dataset_name else None,
             y_label = 'Signature attribution',
             savepath = output_folder + '/signature_based/' + savepath_filename + '_' + signature + '.pdf')

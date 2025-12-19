@@ -12,11 +12,12 @@ workflow plot_spectra_workflow {
     mutation_type
     inputs
     plot_type // 'mutation_spectra' or 'signatures'
+    conversion_done // dummy input to ensure conversion is done before plotting
 
     main:
     process plot_spectra {
         tag "${mutation_type}/${dataset}/${plot_type}"
-        publishDir "${params.plots_output_path}", mode: 'move'
+        publishDir "${params.output_path}/plots", mode: 'move', overwrite: true
 
         input:
         val dataset
@@ -63,7 +64,7 @@ workflow BOOTSTRAP_ATTRIBUTIONS_PLOTS_workflow {
     main:
     process plot_bootstrap_attributions {
         tag "${mutation_type}/${dataset}"
-        publishDir "${params.plots_output_path}", mode: 'move', overwrite: true
+        publishDir "${params.output_path}/plots", mode: 'move', overwrite: true
         
         input:
         tuple val(dataset), val(mutation_type)
@@ -80,8 +81,8 @@ workflow BOOTSTRAP_ATTRIBUTIONS_PLOTS_workflow {
         script:
         """
         python ${workflow.projectDir}/bin/plot_bootstrap_attributions.py -d ${dataset} -t ${mutation_type} -p ${signature_prefix} ${abs_flag} \\
-            -c ${params.SBS_context} -S ${params.temp_path}/signature_tables -I ${params.temp_path}/input_tables \\
-            -i ${params.tables_output_path} -o "./" -n ${params.number_of_bootstrapped_samples}
+            -c ${params.SBS_context} -S ${params.output_path}/temp/signature_tables -I ${params.output_path}/temp/input_tables \\
+            -i ${params.output_path}/output_tables -o "./" -n ${params.number_of_bootstrapped_samples}
         """
     }
     
@@ -110,7 +111,7 @@ workflow METRICS_PLOTS_workflow {
     main:
     process plot_metrics {
         tag "${mutation_type}/${dataset}"
-        publishDir "${params.plots_output_path}", mode: 'move', overwrite: true
+        publishDir "${params.output_path}/plots", mode: 'move', overwrite: true
         
         input:
         tuple val(dataset), val(mutation_type)
@@ -127,7 +128,7 @@ workflow METRICS_PLOTS_workflow {
         script:
         """
         python ${workflow.projectDir}/bin/plot_metrics.py -d ${dataset} -t ${mutation_type} \\
-            -l ${params.metric_threshold} -i ${params.tables_output_path} -o "./"
+            -l ${params.metric_threshold} -i ${params.output_path}/output_tables -o "./"
         """
     }
     
@@ -155,7 +156,7 @@ workflow FITTED_SPECTRA_PLOTS_workflow {
     main:
     process plot_fitted_spectra {
         tag "${mutation_type}/${dataset}"
-        publishDir "${params.plots_output_path}", mode: 'move', overwrite: true
+        publishDir "${params.output_path}/plots", mode: 'move', overwrite: true
         
         input:
         tuple val(dataset), val(mutation_type)
@@ -172,13 +173,13 @@ workflow FITTED_SPECTRA_PLOTS_workflow {
         script:
         """
         python ${workflow.projectDir}/bin/plot_mutation_spectra.py -f -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
-            -i ${params.tables_output_path} ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
+            -i ${params.output_path}/output_tables ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
         python ${workflow.projectDir}/bin/plot_mutation_spectra.py -f -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
-            -r -i ${params.tables_output_path} ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
+            -r -i ${params.output_path}/output_tables ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
         python ${workflow.projectDir}/bin/plot_mutation_spectra.py -C -f -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
-            -i ${params.tables_output_path} ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
+            -i ${params.output_path}/output_tables ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
         python ${workflow.projectDir}/bin/plot_mutation_spectra.py -C -f -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
-            -r -i ${params.tables_output_path} ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
+            -r -i ${params.output_path}/output_tables ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
         """
     }
     
@@ -199,7 +200,7 @@ workflow RESIDUALS_PLOTS_workflow {
     main:
     process plot_residuals {
         tag "${mutation_type}/${dataset}"
-        publishDir "${params.plots_output_path}", mode: 'move', overwrite: true
+        publishDir "${params.output_path}/plots", mode: 'move', overwrite: true
         
         input:
         tuple val(dataset), val(mutation_type)
@@ -216,9 +217,9 @@ workflow RESIDUALS_PLOTS_workflow {
         script:
         """
         python ${workflow.projectDir}/bin/plot_mutation_spectra.py -H -R -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
-            -i ${params.tables_output_path} ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
+            -i ${params.output_path}/output_tables ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
         python ${workflow.projectDir}/bin/plot_mutation_spectra.py -C -R -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
-            -i ${params.tables_output_path} ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
+            -i ${params.output_path}/output_tables ${error_flag} ${strands_flag} ${nontranscribed_flag} -o "./"
         """
     }
     

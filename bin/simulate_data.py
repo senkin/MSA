@@ -1,5 +1,4 @@
 import argparse
-import os
 import warnings
 import random
 import pandas as pd
@@ -18,15 +17,13 @@ signatures_to_generate = {
     # Signature names (strings) have to be present in the input signature tables.
     'SBS1':[150, 100],
     'SBS2':[150, 130],
-    'SBS5':[0, 50],
-    'SBS13':[150, 130],
-    'SBS18':[100, 100],
-    'SBS22':[0, 50],
-    'SBS40':[200, 300],
-    'DBS1':[140,270],
-    'DBS2':[2000,1000],
-    'ID1':[140,270],
-    'ID2':[2000,1000]
+    'SBS3':[200, 100],
+    'SBS4':[150, 100],
+    'SBS5':[500, 50],
+    'DBS1':[50,10],
+    'DBS2':[50, 50],
+    'ID1':[140, 270],
+    'ID2':[1000, 500]
 }
 
 # additional signatures to inject if -I option is specified (useful with -B option)
@@ -64,8 +61,7 @@ def plot_mutational_burden(mutational_burden, mu=None, sigma=None, title='Total'
     """
     make_folder_if_not_exists(savepath.rsplit('/',1)[0])
 
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
+    fig, ax = plt.subplots()
     n, bins, patches = plt.hist(mutational_burden, density=True, bins=20, color='blue', histtype='step')
     if mu and sigma:
         # create a Gaussian with given mu and sigma
@@ -191,7 +187,7 @@ if __name__ == '__main__':
     if args.bootstrap_input_signature_activities_table:
         if not args.input_table:
             parser.error("Please provide the input signature activities table for bootstrap with -i option.")
-        input_table = pd.read_csv(args.input_table, index_col=0, sep=None)
+        input_table = pd.read_csv(args.input_table, index_col=0, sep=',')
         bootstrapped_table = input_table.sample(n=number_of_samples, replace=True)
         for signature in input_table.columns:
             print('Generating signature burden for', signature)
@@ -233,8 +229,8 @@ if __name__ == '__main__':
 
     samples_range = range(0,number_of_samples)
 
-    generated_weights = pd.DataFrame(0, index=samples_range, columns=reference_signatures.columns)
-    generated_mutations = pd.DataFrame(0, index=reference_signatures.index, columns=samples_range)
+    generated_weights = pd.DataFrame(0, index=samples_range, columns=reference_signatures.columns, dtype=float)
+    generated_mutations = pd.DataFrame(0, index=reference_signatures.index, columns=samples_range, dtype=float)
 
     # obtain generated mutational burdens
     generated_mutational_burdens = []
@@ -306,7 +302,7 @@ if __name__ == '__main__':
             generated_mutations.loc[generated_mutations[i]<0, i] = 0
 
         # treating nans with zero (happens when mutation burden is zero in older pandas versions)
-        generated_mutations[i].fillna(0, inplace=True)
+        generated_mutations[i] = generated_mutations[i].fillna(0)
 
         # rounding and converting to integer counts
         generated_mutations[i] = round(generated_mutations[i],0)

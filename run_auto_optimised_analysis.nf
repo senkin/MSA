@@ -15,72 +15,6 @@ nextflow.enable.dsl = 2
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-// input data
-params.signatures_file = null // optional direct path to signatures file, if null, default signature tables will be used from params.signature_tables
-params.input_mutation_table = null // optional direct path to input mutation table file, if null, default input tables will be used from params.input_tables
-params.SP_extractor_output_path = null // optional path to SigProfilerExtractor output, if null, default input will be used
-params.SP_matrix_generator_output_path = null // optional path to SigProfilerMatrixGenerator output, if null, default input will be used
-params.COSMIC_signatures = false // if set to true, COSMIC signatures are used form SigProfiler output, otherwise de-novo ones are used
-params.dataset = 'SIM_test' // dataset name. Input matrices to be provided in params.input_tables/params.dataset, unless SigProfiler inputs are used
-params.mutation_types = ['SBS'] // add or remove mutation types if needed
-params.input_tables = "${workflow.projectDir}/input_mutation_tables"
-params.SBS_context = 96 // 96, 192, 288, 1536 context matrices can be provided (SBS only)
-params.number_of_samples = -1 // number of samples to analyse (-1 means all available)
-
-// output paths
-params.output_path = "${workflow.launchDir}" // specify full path to output folder, default is current working directory
-params.tables_output_path = params.output_path + "/output_tables"
-params.plots_output_path = params.output_path + "/plots"
-params.temp_path = params.output_path + "/temp"
-
-// signatures to use
-params.signature_tables = "${workflow.projectDir}/signature_tables"
-params.signature_prefix = "sigProfiler" // prefix of signature files to use (e.g. sigProfiler, sigRandom)
-
-// simulations parameters
-params.run_only_simulations = false // set to true if only simulations are needed, these will be produced in output_tables folder
-params.number_of_simulated_samples = -1 // number of simulations to run (-1 means automatically apply a rounded factor of ten but not less than 1000)
-params.add_noise = true // add noise in simulations (recommended)
-params.noise_type = "gaussian" // set the type of noise in simulations: gaussian, poisson or negative_binomial (Gaussian by default)
-params.noise_stdev = 10 // set standard deviation of gaussian noise, in percentage of sample mutation burden (10 percent by default)
-params.zero_inflation_threshold = 0.05 // set the relative threshold below which all simulated signature activities are set to zero (0.01 by default)
-
-// optimisation flag and parameters
-params.run_only_optimisation = false // set to true if only optimisation is required, without final attributions
-params.optimisation_NNLS_output_path = params.output_path + "/outputs_optimisation"
-params.optimisation_plots_output_path = params.plots_output_path + "/optimisation_plots"
-params.optimised = true // if set to false, optimisation will run but not be used in final attributions
-params.optimisation_strategy = "removal" // optimisation strategy (removal, addition or add-remove)
-params.weak_thresholds = [0, 0.0001, 0.0002, 0.0003] // range of L2 similarity decrease thresholds to be scanned, excluding weakest signatures - adjust if needed
-params.strong_thresholds = [0] // range of L2 similarity increase thresholds to be scanned, including strongest signatures: only one is sufficient in default removal strategy
-params.bootstrap_method = "binomial" // bootstrap flag and method (binomial, multinomial, residuals, classic, bootstrap_residuals)
-params.number_of_bootstrapped_samples_in_optimisation = 100 // at least 100 is recommended
-params.number_of_bootstrapped_samples = 1000 // bootstrap variations in final attribution, at least 1000 is recommended
-params.confidence_level = 0.95 // specify the confidence level for CI calculation (default: 0.95)
-params.use_absolute_attributions = false // use absolute mutation counts in final bootstrap outputs (relative by default)
-params.metric_to_prioritise = "specificity" // set a metric to prioritise (default: specificity), requiring at least the specified threshold or closest alternative
-params.metric_threshold = 0.95 // specify the minimum threshold of the prioritised metric
-params.signatures_to_prioritise = [] // set a list of signatures to prioritise (empty list means all, by default)
-params.no_CI_for_penalties = false // do not use confidence intervals for optimal penalties calculation
-params.calculate_penalty_on_average = false // apply criteria based on signatures overall (on average, less conservative), rather than maximising prioritised metric for every signature (more conservative)
-
-// plotting flags
-params.plot_optimisation_plots = true
-params.plot_bootstrap_attributions = true
-params.plot_metrics = true
-params.plot_signatures = true
-params.plot_input_spectra = true
-params.plot_fitted_spectra = false
-params.plot_residuals = false
-params.show_poisson_errors = false
-params.show_strands = false // only works with higher contexts (192, 288)
-params.show_nontranscribed_region = false // only wortks with higher contexts (288)
-
-// if SIM in dataset name (synthetic data), use the following percentage range for measuring signature attirbution sensitivities
-params.signature_attribution_thresholds = 0..20
-
-params.help = null
-
 log.info ''
 log.info '--------------------------------------------------------'
 log.info '              __   __  _____                             '
@@ -196,6 +130,7 @@ include { BOOTSTRAP_TABLES_workflow } from './modules/bootstrap_tables'
 include { FINAL_BOOTSTRAP_TABLES_workflow } from './modules/bootstrap_tables'
 include { OPTIMAL_PENALTIES_workflow } from './modules/optimal_penalties'
 include { OPTIMISATION_PLOTS_workflow } from './modules/optimisation_plots'
+include { cleanup_workflow } from './modules/cleanup'
 
 // Main workflow
 workflow {
@@ -206,31 +141,31 @@ workflow {
     if (params.signatures_file) {
         // Convert specific signature file
         convert_data_workflow(params.dataset, file(params.signatures_file).toAbsolutePath(), 'specific_signature_files', mutation_types)
-        signature_files_channel = convert_data_workflow.out.signature_files
+        signature_files_channel = convert_data_workflow.out.signature_files.collect()
         
         if (params.plot_signatures) {
             for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/signature_tables", 'signatures')
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.output_path}/temp/signature_tables", 'signatures', signature_files_channel)
             }
         }
     } else if (params.SP_extractor_output_path) {
         // Convert SigProfiler extractor output to temp location
         convert_data_workflow(params.dataset, params.SP_extractor_output_path, 'signature_tables', mutation_types)
-        signature_files_channel = convert_data_workflow.out.signature_files
+        signature_files_channel = convert_data_workflow.out.signature_files.collect()
         
         if (params.plot_signatures) {
             for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/signature_tables", 'signatures')
-            }
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.output_path}/temp/signature_tables", 'signatures', signature_files_channel)
+                }
         }
     } else {
         // Use default signature tables
         stage_default_signatures_workflow()
-        signature_files_channel = stage_default_signatures_workflow.out.staged_signature_tables
+        signature_files_channel = stage_default_signatures_workflow.out.staged_signature_tables.collect()
         
         if (params.plot_signatures) {
             for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, params.signature_tables, 'signatures')
+                plot_spectra_workflow(params.dataset, mutation_type, params.signature_tables, 'signatures', signature_files_channel)
             }
         }
     }
@@ -239,44 +174,45 @@ workflow {
     if (params.input_mutation_table) {
         // Convert specific mutation table file
         convert_data_workflow(params.dataset, file(params.input_mutation_table).toAbsolutePath(), 'specific_mutation_files', mutation_types)
-        input_files_channel = convert_data_workflow.out.input_files
+        input_files_channel = convert_data_workflow.out.input_files.collect()
         
         if (params.plot_input_spectra) {
             for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/input_tables", 'mutation_spectra')
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.output_path}/temp/input_tables", 'mutation_spectra', input_files_channel)
             }
         }
     } else if (params.SP_extractor_output_path && !params.SP_matrix_generator_output_path) {
         // Convert extractor matrices to temp location
         convert_data_workflow(params.dataset, params.SP_extractor_output_path, 'extractor_matrices', mutation_types)
-        input_files_channel = convert_data_workflow.out.input_files
+        input_files_channel = convert_data_workflow.out.input_files.collect()
         
         if (params.plot_input_spectra) {
             for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/input_tables", 'mutation_spectra')
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.output_path}/temp/input_tables", 'mutation_spectra', input_files_channel)
             }
         }
     } else if (params.SP_matrix_generator_output_path) {
         // Convert matrix generator output to temp location
         convert_data_workflow(params.dataset, params.SP_matrix_generator_output_path, 'matrix_generator_matrices', mutation_types)
-        input_files_channel = convert_data_workflow.out.input_files
+        input_files_channel = convert_data_workflow.out.input_files.collect()
         
         if (params.plot_input_spectra) {
             for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, "${params.temp_path}/input_tables", 'mutation_spectra')
+                plot_spectra_workflow(params.dataset, mutation_type, "${params.output_path}/temp/input_tables", 'mutation_spectra', input_files_channel)
             }
         }
     } else {
         // Use default input tables - collect them into a channel
         stage_default_inputs_workflow(params.dataset)
-        input_files_channel = stage_default_inputs_workflow.out.staged_input_tables
+        input_files_channel = stage_default_inputs_workflow.out.staged_input_tables.collect()
         
         if (params.plot_input_spectra) {
             for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, params.input_tables, 'mutation_spectra')
+                plot_spectra_workflow(params.dataset, mutation_type, params.input_tables, 'mutation_spectra', input_files_channel.collect())
             }
         }
     }
+    def all_plot_outputs = []
 
     // Process each mutation type sequentially to avoid channel conflicts
     for (mutation_type in mutation_types) {
@@ -385,6 +321,16 @@ workflow {
             FINAL_BOOTSTRAP_TABLES_workflow.out.attributions_per_sample,
             FINAL_BOOTSTRAP_TABLES_workflow.out.signature_prevalences
         )
+        all_plot_outputs.add(ALL_FINAL_PLOTS_workflow.out.bootstrap_plots)
+        all_plot_outputs.add(ALL_FINAL_PLOTS_workflow.out.metrics_plots)
+        all_plot_outputs.add(ALL_FINAL_PLOTS_workflow.out.fitted_plots)
+        all_plot_outputs.add(ALL_FINAL_PLOTS_workflow.out.residuals_plots)
+    }
+    // Cleanup temporary files if specified
+    if (params.cleanup_temp) {
+        // Combine all accumulated channels
+        all_plots_done = Channel.empty().mix(*all_plot_outputs).collect()
+        cleanup_workflow(all_plots_done)
     }
 }
 

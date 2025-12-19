@@ -10,7 +10,7 @@ workflow OPTIMISATION_PLOTS_workflow {
     // Process to plot optimisation plots
     process plot_optimisation_plots {
         tag "${mutation_type}/${dataset}"
-        publishDir "${params.optimisation_plots_output_path}"
+        publishDir "${params.output_path}/optimisation_plots", mode: 'move', overwrite: true
         
         input:
         tuple val(dataset), val(mutation_type)
@@ -29,13 +29,13 @@ workflow OPTIMISATION_PLOTS_workflow {
         def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
         """
         python ${workflow.projectDir}/bin/plot_metric_heatmaps.py -d SIM_${dataset} -t ${mutation_type} \\
-            -i ${params.optimisation_NNLS_output_path} -o "./" \\
+            -i ${params.output_path}/outputs_optimisation -o "./" \\
             -c ${params.SBS_context} \\
             -l ${params.metric_threshold} \\
             -W ${weak_thresholds_list.join(' ')} \\
             -S ${strong_thresholds_list.join(' ')} \\
             -T ${params.signature_attribution_thresholds.join(' ')} \\
-            --signature_path ${params.temp_path}/signature_tables \\
+            --signature_path ${params.output_path}/temp/signature_tables \\
             -p ${signature_prefix}
         """
     }

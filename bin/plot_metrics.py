@@ -60,14 +60,14 @@ def make_boxplot(input_table, title, xlabel, ylabel, show_mean=False, ylim_zero_
             plt.plot(x, y, mec='k', ms=3, marker="o", linestyle="None")
     
     if 'Sensitivity' in columns and sensitivity_CIs is not None:
-        errorbars = np.abs(sensitivity_CIs-table['Sensitivity'][0])
-        errorbars = [[sensitivity_CIs['lower_CL'][0]],[sensitivity_CIs['upper_CL'][0]]]
-        plt.errorbar(table.columns.get_loc("Sensitivity")+1, table['Sensitivity'][0],  yerr=errorbars, color='black', capsize=5)
-    
+        errorbars = np.abs(sensitivity_CIs-table['Sensitivity'].iloc[0])
+        errorbars = [[sensitivity_CIs['lower_CL'].iloc[0]],[sensitivity_CIs['upper_CL'].iloc[0]]]
+        plt.errorbar(table.columns.get_loc("Sensitivity")+1, table['Sensitivity'].iloc[0],  yerr=errorbars, color='black', capsize=5)
+
     if 'Specificity' in columns and specificity_CIs is not None:
-        errorbars = np.abs(specificity_CIs-table['Specificity'][0])
-        errorbars = [[specificity_CIs['lower_CL'][0]],[specificity_CIs['upper_CL'][0]]]
-        plt.errorbar(table.columns.get_loc("Specificity")+1, table['Specificity'][0], yerr=errorbars, color='black', capsize=5)
+        errorbars = np.abs(specificity_CIs-table['Specificity'].iloc[0])
+        errorbars = [[specificity_CIs['lower_CL'].iloc[0]],[specificity_CIs['upper_CL'].iloc[0]]]
+        plt.errorbar(table.columns.get_loc("Specificity")+1, table['Specificity'].iloc[0], yerr=errorbars, color='black', capsize=5)
 
     if 'Sensitivity' not in columns and sensitivity_CIs is not None:
         sensitivity_CIs_dataframe = pd.DataFrame(columns=['lower_CL','upper_CL'])
@@ -215,7 +215,7 @@ if __name__ == '__main__':
         # plot sensitivity threshold vs CP plot for each sig
         for signature in signatures_to_consider:
             signature_attribution_thresholds = sorted(signatures_CPs_dict.keys())
-            CPs = [signatures_CPs_dict[threshold][signature][0] for threshold in signature_attribution_thresholds]
+            CPs = [signatures_CPs_dict[threshold][signature].iloc[0] for threshold in signature_attribution_thresholds]
             make_lineplot(signature_attribution_thresholds, CPs, 'Sensitivity threshold', 'Confidence probability', 'Signature %s' % signature, output_folder + '/truth_studies/CP_curves/signature_%s_curve.pdf' % signature)
         
         # plot all other metrics

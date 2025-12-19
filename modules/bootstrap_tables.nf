@@ -14,7 +14,7 @@ workflow BOOTSTRAP_TABLES_workflow {
     // Process to make bootstrap tables for each threshold combination
     process make_optimisation_bootstrap_tables {
         tag "${mutation_type}/${dataset}/${weak_threshold}/${strong_threshold}"
-        publishDir "${params.optimisation_NNLS_output_path}"
+        publishDir "${params.output_path}/outputs_optimisation"
         
         input:
         tuple val(dataset), val(mutation_type)
@@ -33,9 +33,9 @@ workflow BOOTSTRAP_TABLES_workflow {
         """
         python ${workflow.projectDir}/bin/make_bootstrap_tables.py -d SIM_${dataset} -t ${mutation_type} -p ${signature_prefix} \\
             --suffix ${weak_threshold}_${strong_threshold} -l ${params.confidence_level} \\
-            -c ${params.SBS_context} -S ${params.temp_path}/signature_tables \\
+            -c ${params.SBS_context} -S ${params.output_path}/temp/signature_tables \\
             -T ${params.signature_attribution_thresholds.join(' ')} \\
-            -i ${params.optimisation_NNLS_output_path} -o "./" -n ${num_bootstrap_samples}
+            -i ${params.output_path}/outputs_optimisation -o "./" -n ${num_bootstrap_samples}
         """
     }
     
@@ -72,7 +72,7 @@ workflow FINAL_BOOTSTRAP_TABLES_workflow {
     // Process to make final bootstrap tables
     process make_bootstrap_tables {
         tag "${mutation_type}/${dataset}"
-        publishDir "${params.tables_output_path}", mode: 'copy', overwrite: true
+        publishDir "${params.output_path}/output_tables", mode: 'copy', overwrite: true
         
         input:
         tuple val(dataset), val(mutation_type)
@@ -93,25 +93,25 @@ workflow FINAL_BOOTSTRAP_TABLES_workflow {
         def abs_flag = (params.use_absolute_attributions) ? "-a" : ''
         def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
         """
-        mkdir -p ${params.tables_output_path}/${dataset}
+        mkdir -p ${params.output_path}/output_tables/${dataset}
         
         # Copy simulation files if this is a simulated dataset
         if [[ ${dataset} == *"SIM"* ]]; then
             if [[ ${mutation_type} == "SBS" ]]; then
-                cp ${workflow.projectDir}/input_mutation_tables/${dataset}/WGS_${dataset}.${params.SBS_context}.weights.csv ${params.tables_output_path}/${dataset}/
+                cp ${workflow.projectDir}/input_mutation_tables/${dataset}/WGS_${dataset}.${params.SBS_context}.weights.csv ${params.output_path}/output_tables/${dataset}/
             elif [[ ${mutation_type} == "DBS" ]]; then
-                cp ${workflow.projectDir}/input_mutation_tables/${dataset}/WGS_${dataset}.dinucs.weights.csv ${params.tables_output_path}/${dataset}/
+                cp ${workflow.projectDir}/input_mutation_tables/${dataset}/WGS_${dataset}.dinucs.weights.csv ${params.output_path}/output_tables/${dataset}/
             elif [[ ${mutation_type} == "ID" ]]; then
-                cp ${workflow.projectDir}/input_mutation_tables/${dataset}/WGS_${dataset}.indels.weights.csv ${params.tables_output_path}/${dataset}/
+                cp ${workflow.projectDir}/input_mutation_tables/${dataset}/WGS_${dataset}.indels.weights.csv ${params.output_path}/output_tables/${dataset}/
             elif [[ ${mutation_type} == "SV" || ${mutation_type} == "CNV" ]]; then
-                cp ${workflow.projectDir}/input_mutation_tables/${dataset}/WGS_${dataset}.${mutation_type}.weights.csv ${params.tables_output_path}/${dataset}/
+                cp ${workflow.projectDir}/input_mutation_tables/${dataset}/WGS_${dataset}.${mutation_type}.weights.csv ${params.output_path}/output_tables/${dataset}/
             fi
         fi
         
         python ${workflow.projectDir}/bin/make_bootstrap_tables.py -d ${dataset} -t ${mutation_type} -p ${signature_prefix} ${abs_flag} \\
-            -c ${params.SBS_context} -S ${params.temp_path}/signature_tables -l ${params.confidence_level} \\
+            -c ${params.SBS_context} -S ${params.output_path}/temp/signature_tables -l ${params.confidence_level} \\
             -T ${params.signature_attribution_thresholds.join(' ')} \\
-            -i ${params.tables_output_path} -o "./" -n ${num_bootstrap_samples}
+            -i ${params.output_path}/output_tables -o "./" -n ${num_bootstrap_samples}
         """
     }
     
