@@ -74,21 +74,63 @@ _IDX_TO_METRIC = {
 }
 
 
-def _attribution_similarity(sig_sub, observed, idx, norm_obs):
-    """Solve NNLS for a signature sub-matrix and return ONLY the single
-    similarity metric (at position ``idx`` in the stat_info layout) needed to
-    drive an optimisation decision.
+def batched_nnls_shared_b(A, b, column_sets):
+    """Solve NNLS(A[:, cols], b) for each ``cols`` in ``column_sets``.
 
-    This is the hot-loop replacement for perform_signature_attribution(): the
-    optimisation loops call this thousands of times per sample, and they only
-    ever consume one similarity value. Computing burden / RSS / Chi2 / R2 and the
-    six unused similarities here (as the original code did) is pure overhead.
+    Every problem in the batch shares the same target ``b`` and selects columns
+    from the same matrix ``A``. In the leave-one-out (removal) and add-one
+    (addition) cases all problems have the same number of columns, so the batch
+    is uniform.
 
-    The default optimisation metric, L2_normalised_by_first (idx 8), is computed
-    directly from the residual without going through scipy.spatial.distance.
+    THIS IS THE GPU SWAP POINT FOR THE OPTIMISATION HOT PATH. The CPU
+    implementation is a tight scipy loop; a batched GPU/cuML NNLS solver can
+    replace this function wholesale (it receives ``A``, ``b`` and the per-problem
+    column sets, i.e. everything a masked batched kernel needs).
+
+    Parameters
+    ----------
+    A : ndarray (n_channels, n_signatures_total)
+    b : ndarray (n_channels,)
+    column_sets : sequence of int index sequences
+
+    Returns
+    -------
+    list of ndarray : weights[i] has length len(column_sets[i]).
     """
-    weights, _ = nnls(sig_sub, observed)
-    fitted = sig_sub @ weights
+    return [nnls(A[:, cols], b)[0] for cols in column_sets]
+
+
+def batched_nnls_shared_A(A, B):
+    """Solve NNLS(A, b) for every column ``b`` of ``B`` (shared design matrix).
+
+    THIS IS THE GPU SWAP POINT FOR NON-OPTIMISED ATTRIBUTION, where every sample
+    is fitted against the same signature matrix: one ``A``, many targets. The CPU
+    implementation is a tight scipy loop; a batched GPU/cuML NNLS solver can
+    replace it wholesale.
+
+    Parameters
+    ----------
+    A : ndarray (n_channels, n_signatures)
+    B : ndarray (n_channels, n_samples)
+
+    Returns
+    -------
+    ndarray (n_signatures, n_samples) : weights for each sample (column).
+    """
+    weights = np.zeros((A.shape[1], B.shape[1]))
+    for i in range(B.shape[1]):
+        weights[:, i], _ = nnls(A, B[:, i])
+    return weights
+
+
+def _similarity_from_fitted(observed, fitted, idx, norm_obs):
+    """Return ONLY the single similarity metric (position ``idx`` in the
+    stat_info layout) from an already-computed fitted vector.
+
+    Shared by the single-solve and batched paths so they use identical
+    arithmetic. The default optimisation metric, L2_normalised_by_first (idx 8),
+    is computed directly from the residual without scipy.spatial.distance.
+    """
     if idx == 8:  # L2_normalised_by_first: 1 - ||observed - fitted|| / ||observed||
         return 1.0 - np.linalg.norm(observed - fitted) / norm_obs
     if idx in _IDX_TO_METRIC:
@@ -108,13 +150,30 @@ def _attribution_similarity(sig_sub, observed, idx, norm_obs):
     return stat_info[idx]
 
 
-def perform_signature_attribution(selected_mutations, signatures, normalise_mutations=False, verbose=False):
+def _attribution_similarity(sig_sub, observed, idx, norm_obs):
+    """Solve a single NNLS problem and return only the optimisation metric.
+
+    Used for the base/final solves; the per-step candidate batches go through
+    batched_nnls_shared_b() instead.
+    """
+    weights, _ = nnls(sig_sub, observed)
+    fitted = sig_sub @ weights
+    return _similarity_from_fitted(observed, fitted, idx, norm_obs)
+
+
+def perform_signature_attribution(selected_mutations, signatures, normalise_mutations=False,
+                                  verbose=False, weights=None):
     """Optimized NNLS attribution with cached computations.
 
     Computes the full stat_info list (burden + all similarities). This is used
     for the final per-sample attribution that is written to disk; the iterative
     optimisation loops use _attribution_similarity() instead, which computes only
     the single metric they need.
+
+    If ``weights`` is supplied (e.g. from a batched NNLS solve), the NNLS step is
+    skipped and those weights are used directly. This lets the non-optimised path
+    solve all samples through batched_nnls_shared_A() and still reuse this
+    function for the per-sample post-processing.
     """
     if signatures.empty:
         if verbose:
@@ -126,8 +185,9 @@ def perform_signature_attribution(selected_mutations, signatures, normalise_muta
     sig_array = signatures.values
     mut_array = np.array(selected_mutations)
 
-    # NNLS solve
-    weights, _ = nnls(sig_array, mut_array)
+    # NNLS solve (skipped when weights are supplied by a batched solver)
+    if weights is None:
+        weights, _ = nnls(sig_array, mut_array)
 
     # Normalize weights
     weight_sum = weights.sum()
@@ -185,12 +245,16 @@ def remove_weak_signatures(observed, norm_obs, sig_values, active_cols, col_name
         print(f'Current signatures: {[col_names[c] for c in active_cols]}')
 
     while len(active_cols) > 1:
+        # Batched leave-one-out solve: each candidate drops one signature, all
+        # sharing the same target b (the GPU swap point for the hot path).
+        column_sets = [active_cols[:p] + active_cols[p + 1:] for p in range(len(active_cols))]
+        candidate_weights = batched_nnls_shared_b(sig_values, observed, column_sets)
+
         # Contribution of each signature = drop in similarity if it is removed.
         contributions = np.empty(len(active_cols))
-        for p in range(len(active_cols)):
-            candidate = active_cols[:p] + active_cols[p + 1:]
-            sim = _attribution_similarity(sig_values[:, candidate], observed, idx, norm_obs)
-            contributions[p] = base_similarity - sim
+        for p, cols in enumerate(column_sets):
+            fitted = sig_values[:, cols] @ candidate_weights[p]
+            contributions[p] = base_similarity - _similarity_from_fitted(observed, fitted, idx, norm_obs)
 
         p_weakest = int(np.argmin(contributions))
         if contributions[p_weakest] < weak_threshold:
@@ -234,10 +298,15 @@ def add_strong_signatures(observed, norm_obs, sig_values, active_cols, candidate
         print(f'Starting addition loop. Base similarity: {base_similarity}')
 
     while remaining:
+        # Batched add-one solve: each candidate adds one signature, all sharing
+        # the same target b (the GPU swap point for the hot path).
+        column_sets = [active_cols + [c] for c in remaining]
+        candidate_weights = batched_nnls_shared_b(sig_values, observed, column_sets)
+
         contributions = np.empty(len(remaining))
-        for p, c in enumerate(remaining):
-            sim = _attribution_similarity(sig_values[:, active_cols + [c]], observed, idx, norm_obs)
-            contributions[p] = sim - base_similarity
+        for p, cols in enumerate(column_sets):
+            fitted = sig_values[:, cols] @ candidate_weights[p]
+            contributions[p] = _similarity_from_fitted(observed, fitted, idx, norm_obs) - base_similarity
 
         p_strongest = int(np.argmax(contributions))
         if contributions[p_strongest] > strong_threshold:
@@ -357,35 +426,65 @@ def process_samples_batch(input_mutations, signatures, sel_sig_nums, args):
 
     initial_signatures = signatures.iloc[:, sel_sig_nums]
 
-    for s_i, sample in enumerate(samples):
-        selected_mutations = input_mutations[sample].values
+    def _store(s_i, cols, normalised_weights, mutation_numbers, stat_info, residuals, fitted):
+        weights_arr[s_i, cols] = normalised_weights
+        mutations_arr[s_i, cols] = mutation_numbers
+        stat_arr[s_i, :] = stat_info
+        residuals_arr[:, s_i] = residuals
+        fitted_arr[:, s_i] = fitted
 
-        if selected_mutations.sum() <= 0:
-            warnings.warn(f"Sample {sample}: Zero mutations, skipping")
-            continue
+    if not args.optimise_signatures and not initial_signatures.empty:
+        # Non-optimised: every sample shares the same signature matrix, so all
+        # NNLS solves go through a single batched call (the shared-A GPU swap
+        # point). Per-sample post-processing reuses perform_signature_attribution
+        # via its weights= argument, keeping output identical to the per-sample path.
+        sig_array = np.asarray(initial_signatures.values, dtype=float)
+        cols = [col_pos[name] for name in initial_signatures.columns]
 
-        if args.optimise_signatures:
-            final_signatures = optimise_signatures(
-                selected_mutations, initial_signatures, signatures,
-                strategy=args.optimisation_strategy,
-                weak_threshold=args.weak_threshold,
-                strong_threshold=args.strong_threshold,
-                verbose=args.verbose)
-        else:
-            final_signatures = initial_signatures
+        valid_s_i, valid_b = [], []
+        for s_i, sample in enumerate(samples):
+            selected_mutations = input_mutations[sample].values
+            if selected_mutations.sum() <= 0:
+                warnings.warn(f"Sample {sample}: Zero mutations, skipping")
+                continue
+            valid_s_i.append(s_i)
+            valid_b.append(np.asarray(selected_mutations, dtype=float))
 
-        if not final_signatures.empty:
-            normalised_weights, mutation_numbers, fitted, residuals, stat_info = \
-                perform_signature_attribution(selected_mutations, final_signatures,
-                                            normalise_mutations=args.normalise_mutations,
-                                            verbose=args.verbose)
+        if valid_b:
+            B = np.column_stack(valid_b)
+            weights_batch = batched_nnls_shared_A(sig_array, B)
+            for j, s_i in enumerate(valid_s_i):
+                normalised_weights, mutation_numbers, fitted, residuals, stat_info = \
+                    perform_signature_attribution(B[:, j], initial_signatures,
+                                                normalise_mutations=args.normalise_mutations,
+                                                verbose=args.verbose, weights=weights_batch[:, j])
+                _store(s_i, cols, normalised_weights, mutation_numbers, stat_info, residuals, fitted)
+    else:
+        for s_i, sample in enumerate(samples):
+            selected_mutations = input_mutations[sample].values
 
-            cols = [col_pos[name] for name in final_signatures.columns]
-            weights_arr[s_i, cols] = normalised_weights
-            mutations_arr[s_i, cols] = mutation_numbers
-            stat_arr[s_i, :] = stat_info
-            residuals_arr[:, s_i] = residuals
-            fitted_arr[:, s_i] = fitted
+            if selected_mutations.sum() <= 0:
+                warnings.warn(f"Sample {sample}: Zero mutations, skipping")
+                continue
+
+            if args.optimise_signatures:
+                final_signatures = optimise_signatures(
+                    selected_mutations, initial_signatures, signatures,
+                    strategy=args.optimisation_strategy,
+                    weak_threshold=args.weak_threshold,
+                    strong_threshold=args.strong_threshold,
+                    verbose=args.verbose)
+            else:
+                final_signatures = initial_signatures
+
+            if not final_signatures.empty:
+                normalised_weights, mutation_numbers, fitted, residuals, stat_info = \
+                    perform_signature_attribution(selected_mutations, final_signatures,
+                                                normalise_mutations=args.normalise_mutations,
+                                                verbose=args.verbose)
+
+                cols = [col_pos[name] for name in final_signatures.columns]
+                _store(s_i, cols, normalised_weights, mutation_numbers, stat_info, residuals, fitted)
 
     stat_columns = ['Mutational burden', 'RSS', 'Chi2', 'R2',
                     'Cosine similarity', 'Correlation', 'Chebyshev similarity',
