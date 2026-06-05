@@ -521,6 +521,19 @@ if __name__ == '__main__':
     parser.add_argument("--bootstrap_method", dest="bootstrap_method", default='binomial')
     parser.add_argument("--add_suffix", dest="add_suffix", action="store_true")
     parser.add_argument("--optimisation_strategy", dest="optimisation_strategy", default='removal')
+    parser.add_argument("--n_bootstrap", dest="n_bootstrap", default=0, type=int,
+                       help="If > 0, run this many bootstrap iterations in a single process, "
+                            "writing one indexed set of output files per iteration into "
+                            "<output_path>/bootstrap_output/. Use n=1 (with --bootstrap_start_index) "
+                            "for one process per iteration (CPU fan-out), or n=N for all iterations "
+                            "in one process (GPU: a single reused context).")
+    parser.add_argument("--bootstrap_start_index", dest="bootstrap_start_index", default=1, type=int,
+                       help="Index of the first bootstrap iteration written by this process "
+                            "(iterations are numbered start .. start + n_bootstrap - 1). Lets a "
+                            "fanned-out / chunked launch write a distinct slice of the indices.")
+    parser.add_argument("--bootstrap_output_suffix", dest="bootstrap_output_suffix", default='',
+                       help="String inserted into per-iteration bootstrap output filenames "
+                            "(e.g. '<weak>_<strong>' thresholds), to match downstream expectations.")
 
     args = parser.parse_args()
 
@@ -594,49 +607,99 @@ if __name__ == '__main__':
     if args.bootstrap:
         print(f"Bootstrap method: {args.bootstrap_method}")
 
-    # Bootstrap if requested
-    if args.bootstrap and args.bootstrap_method != "bootstrap_residuals":
-        input_mutations = bootstrap_mutation_table(input_mutations, method=args.bootstrap_method)
-
-    # Limit samples if specified
-    if args.number_of_samples != -1:
-        input_mutations = input_mutations.iloc[:, :args.number_of_samples]
-
-    # Align indices
-    input_mutations = input_mutations.reindex(signatures.index)
-
-    # Handle bootstrap_residuals method
-    if args.bootstrap and args.bootstrap_method == "bootstrap_residuals":
-        residuals_df = pd.read_csv(f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_residuals.csv',
-                                   index_col=[0,1,2])
-        fitted_df = pd.read_csv(f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_fitted_values.csv',
-                               index_col=[0,1,2])
-        input_mutations = bootstrap_mutation_table(input_mutations, method=args.bootstrap_method,
-                                                   fitted=fitted_df, residuals=residuals_df)
-
     num_ref_sigs = signatures.shape[1]
     sel_sig_nums = list(range(num_ref_sigs))
-
     print(f"Analyzing signatures: {signatures.columns[sel_sig_nums].tolist()}")
 
-    # Process samples
-    start_time = time.process_time()
+    if args.n_bootstrap > 0:
+        # ===== In-process bootstrap loop (P3) =====
+        # All bootstrap iterations run in a single process, so Python startup,
+        # numba JIT compilation and CSV loading are paid once instead of once per
+        # iteration. This also keeps a single (future) GPU context alive across all
+        # iterations rather than recreating one per Nextflow task. Each iteration
+        # resamples the base table afresh and writes its own indexed output set.
+        method = args.bootstrap_method
 
-    output_weights, output_mutations, output_stat_info, residuals_df, fitted_df = \
-        process_samples_batch(input_mutations, signatures, sel_sig_nums, args)
+        # Limit samples once; resample the same base table each iteration.
+        if args.number_of_samples != -1:
+            input_mutations = input_mutations.iloc[:, :args.number_of_samples]
 
-    end_time = time.process_time()
-    elapsed = end_time - start_time
-    n_samples = len(input_mutations.columns)
-    print(f"Attribution took {elapsed:.2f}s ({elapsed/n_samples:.2f}s per sample)")
+        residuals_table = fitted_table = None
+        if method == "bootstrap_residuals":
+            residuals_table = pd.read_csv(
+                f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_residuals.csv',
+                index_col=[0, 1, 2])
+            fitted_table = pd.read_csv(
+                f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_fitted_values.csv',
+                index_col=[0, 1, 2])
 
-    # Save outputs
-    output_weights.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_weights_table.csv')
-    output_mutations.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_mutations_table.csv')
-    output_stat_info.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_stat_info.csv')
-    residuals_df.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_residuals.csv')
-    fitted_df.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_fitted_values.csv')
+        bootstrap_dir = f'{output_path}/bootstrap_output'
+        make_folder_if_not_exists(bootstrap_dir)
+        suffix = f'_{args.bootstrap_output_suffix}' if args.bootstrap_output_suffix else ''
 
-    if not args.bootstrap:
-        residuals_df.to_csv(f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_residuals.csv')
-        fitted_df.to_csv(f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_fitted_values.csv')
+        start_index = args.bootstrap_start_index
+        end_index = start_index + args.n_bootstrap - 1
+        print(f"Running {args.n_bootstrap} bootstrap iteration(s) "
+              f"(indices {start_index}..{end_index}, method: {method})")
+        start_time = time.process_time()
+        for i in range(start_index, end_index + 1):
+            if method == "bootstrap_residuals":
+                resampled = bootstrap_mutation_table(input_mutations, method=method,
+                                                     fitted=fitted_table, residuals=residuals_table)
+            else:
+                resampled = bootstrap_mutation_table(input_mutations, method=method)
+            resampled = resampled.reindex(signatures.index)
+
+            b_weights, b_mutations, b_stat_info, _, _ = \
+                process_samples_batch(resampled, signatures, sel_sig_nums, args)
+
+            prefix = f'{bootstrap_dir}/output_{dataset_name}_{mutation_type}{suffix}_{i}'
+            b_weights.to_csv(f'{prefix}_weights_table.csv')
+            b_mutations.to_csv(f'{prefix}_mutations_table.csv')
+            b_stat_info.to_csv(f'{prefix}_stat_info.csv')
+        elapsed = time.process_time() - start_time
+        print(f"{args.n_bootstrap} bootstrap iterations took {elapsed:.2f}s "
+              f"({elapsed/args.n_bootstrap:.3f}s per iteration)")
+    else:
+        # ===== Single attribution (central run, or a single externally-indexed bootstrap) =====
+        # Bootstrap if requested
+        if args.bootstrap and args.bootstrap_method != "bootstrap_residuals":
+            input_mutations = bootstrap_mutation_table(input_mutations, method=args.bootstrap_method)
+
+        # Limit samples if specified
+        if args.number_of_samples != -1:
+            input_mutations = input_mutations.iloc[:, :args.number_of_samples]
+
+        # Align indices
+        input_mutations = input_mutations.reindex(signatures.index)
+
+        # Handle bootstrap_residuals method
+        if args.bootstrap and args.bootstrap_method == "bootstrap_residuals":
+            residuals_df = pd.read_csv(f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_residuals.csv',
+                                       index_col=[0,1,2])
+            fitted_df = pd.read_csv(f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_fitted_values.csv',
+                                   index_col=[0,1,2])
+            input_mutations = bootstrap_mutation_table(input_mutations, method=args.bootstrap_method,
+                                                       fitted=fitted_df, residuals=residuals_df)
+
+        # Process samples
+        start_time = time.process_time()
+
+        output_weights, output_mutations, output_stat_info, residuals_df, fitted_df = \
+            process_samples_batch(input_mutations, signatures, sel_sig_nums, args)
+
+        end_time = time.process_time()
+        elapsed = end_time - start_time
+        n_samples = len(input_mutations.columns)
+        print(f"Attribution took {elapsed:.2f}s ({elapsed/n_samples:.2f}s per sample)")
+
+        # Save outputs
+        output_weights.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_weights_table.csv')
+        output_mutations.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_mutations_table.csv')
+        output_stat_info.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_stat_info.csv')
+        residuals_df.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_residuals.csv')
+        fitted_df.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_fitted_values.csv')
+
+        if not args.bootstrap:
+            residuals_df.to_csv(f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_residuals.csv')
+            fitted_df.to_csv(f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_fitted_values.csv')
