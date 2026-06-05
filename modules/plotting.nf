@@ -24,6 +24,7 @@ workflow plot_spectra_workflow {
         val mutation_type
         path inputs
         val plot_type
+        path conversion_done // barrier: forces staging/conversion to finish before plotting
 
         output:
         path '*/*/*.pdf', optional: true
@@ -51,8 +52,9 @@ workflow plot_spectra_workflow {
             """
         }
     }
-    // Invoke the process
-    plot_spectra(dataset, mutation_type, inputs, plot_type)
+    // Invoke the process (conversion_done is passed as an ordering barrier so the
+    // plot never starts before staging/conversion of its inputs has finished)
+    plot_spectra(dataset, mutation_type, inputs, plot_type, conversion_done)
 }
 
 // Bootstrap attributions plotting workflow
