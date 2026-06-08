@@ -78,12 +78,12 @@ workflow FINAL_BOOTSTRAP_TABLES_workflow {
         val num_bootstrap_samples
         
         output:
-        path "./${dataset}/CIs_${dataset}_${mutation_type}_bootstrap_output_*.csv", emit: confidence_intervals
-        path "./${dataset}/signatures_prevalences_${dataset}_${mutation_type}.csv", emit: signature_prevalences
-        path "./${dataset}/attributions_per_sample_${dataset}_${mutation_type}_bootstrap_output_*.json", emit: attributions_per_sample
-        path "./${dataset}/attributions_per_signature_${dataset}_${mutation_type}_bootstrap_output_*.json", emit: attributions_per_signature
-        path "./${dataset}/stat_metrics_${dataset}_${mutation_type}_bootstrap_output_*.json", emit: stat_metrics
-        path "./${dataset}/pruned_attribution_${dataset}_${mutation_type}_abs_mutations.csv", emit: pruned_attribution
+        path "${dataset}/CIs_${dataset}_${mutation_type}_bootstrap_output_*.csv", emit: confidence_intervals
+        path "${dataset}/signatures_prevalences_${dataset}_${mutation_type}.csv", emit: signature_prevalences
+        path "${dataset}/attributions_per_sample_${dataset}_${mutation_type}_bootstrap_output_*.json", emit: attributions_per_sample
+        path "${dataset}/attributions_per_signature_${dataset}_${mutation_type}_bootstrap_output_*.json", emit: attributions_per_signature
+        path "${dataset}/stat_metrics_${dataset}_${mutation_type}_bootstrap_output_*.json", emit: stat_metrics
+        path "${dataset}/pruned_attribution_${dataset}_${mutation_type}_abs_mutations.csv", emit: pruned_attribution
         path "*/truth_studies/*.csv", optional: true, emit: truth_studies_csv
         path "*/truth_studies/*.json", optional: true, emit: truth_studies_json
         
