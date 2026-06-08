@@ -95,57 +95,72 @@ def calculate_sensitivity_thresholds(signatures_CPs_dict, signatures_to_consider
     return sensitivity_thresholds
 
 
-def process_bootstrap_samples(number_of_b_samples, bootstrap_files, samples, 
+# Attribution scales produced for every run: relative (weights) and absolute
+# (mutation counts). Maps the output-name suffix to the bootstrap file key.
+ATTRIBUTION_SCALES = {'weights': 'weights', 'abs_mutations': 'abs'}
+
+
+def process_bootstrap_samples(number_of_b_samples, bootstrap_files, samples,
                               signatures_to_consider, stat_metrics):
     """
-    Process all bootstrap samples efficiently using vectorized operations where possible.
-    Returns dictionaries of dataframes with bootstrap values.
+    Process all bootstrap samples in a single pass, reading BOTH the relative
+    (weights) and absolute (mutation-count) bootstrap tables so that downstream
+    confidence intervals and attribution distributions can be produced on both
+    scales without re-reading the bootstrap files.
+
+    Returns:
+        attributions_per_sample:    {scale: {sample: DataFrame(iter x signatures)}}
+        attributions_per_signature: {scale: {signature: DataFrame(iter x samples)}}
+        stat_metrics_dict:          {metric: DataFrame(iter x samples)}  (scale-independent)
+    where scale is one of ATTRIBUTION_SCALES ('weights', 'abs_mutations').
     """
-    # Pre-allocate arrays for better performance
-    n_samples = len(samples)
-    n_signatures = len(signatures_to_consider)
-    n_metrics = len(stat_metrics)
-    
-    # Initialize dictionaries with pre-allocated DataFrames
+    # Initialize per-scale dictionaries with pre-allocated DataFrames
     attributions_per_sample = {
-        sample: pd.DataFrame(
-            index=range(number_of_b_samples), 
-            columns=signatures_to_consider, 
-            dtype=float
-        ) for sample in samples
+        scale: {
+            sample: pd.DataFrame(
+                index=range(number_of_b_samples),
+                columns=signatures_to_consider,
+                dtype=float
+            ) for sample in samples
+        } for scale in ATTRIBUTION_SCALES
     }
-    
+
     attributions_per_signature = {
-        sig: pd.DataFrame(
-            index=range(number_of_b_samples), 
-            columns=samples, 
-            dtype=float
-        ) for sig in signatures_to_consider
+        scale: {
+            sig: pd.DataFrame(
+                index=range(number_of_b_samples),
+                columns=samples,
+                dtype=float
+            ) for sig in signatures_to_consider
+        } for scale in ATTRIBUTION_SCALES
     }
-    
+
     stat_metrics_dict = {
         metric: pd.DataFrame(
-            index=range(number_of_b_samples), 
-            columns=samples, 
+            index=range(number_of_b_samples),
+            columns=samples,
             dtype=float
         ) for metric in stat_metrics
     }
-    
-    # Process each bootstrap sample
+
+    # Process each bootstrap sample (read both scales + stats once per iteration)
     for i in range(number_of_b_samples):
-        bootstrap_attr = pd.read_csv(bootstrap_files['weights'](i+1), index_col=0)
+        attr_tables = {
+            scale: pd.read_csv(bootstrap_files[file_key](i + 1), index_col=0)
+            for scale, file_key in ATTRIBUTION_SCALES.items()
+        }
         stat_table = pd.read_csv(bootstrap_files['stat'](i+1), index_col=0)
-        
-        # Vectorized assignment - much faster than nested loops
-        for sample in samples:
-            attributions_per_sample[sample].loc[i] = bootstrap_attr.loc[sample]
-        
-        for signature in signatures_to_consider:
-            attributions_per_signature[signature].loc[i] = bootstrap_attr[signature]
-        
+
+        for scale in ATTRIBUTION_SCALES:
+            bootstrap_attr = attr_tables[scale]
+            for sample in samples:
+                attributions_per_sample[scale][sample].loc[i] = bootstrap_attr.loc[sample]
+            for signature in signatures_to_consider:
+                attributions_per_signature[scale][signature].loc[i] = bootstrap_attr[signature]
+
         for metric in stat_metrics:
             stat_metrics_dict[metric].loc[i] = stat_table[metric]
-    
+
     return attributions_per_sample, attributions_per_signature, stat_metrics_dict
 
 
@@ -236,8 +251,6 @@ def main():
     parser.add_argument("-c", "--context", dest="context", default=192, type=int)
     parser.add_argument("-l", "--confidence_level", dest="confidence_level", 
                        default=0.95, type=float)
-    parser.add_argument("-a", "--use_absolute_numbers", dest="abs_numbers", 
-                       action="store_true")
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true")
     parser.add_argument("-n", "--number_of_b_samples", dest="number_of_b_samples", 
                        default=1000, type=int)
@@ -311,19 +324,21 @@ def main():
             args.context
         )
 
-    # Select attribution table type
-    central_attribution = central_attr_abs if args.abs_numbers else central_attr_weights
-    filename_suffix = 'abs_mutations' if args.abs_numbers else 'weights'
-    filename = f'{args.dataset_name}_{args.mutation_type}_bootstrap_output_{filename_suffix}'
-
     # Limit samples if specified
     if args.number_of_samples != -1:
-        central_attribution = central_attribution.head(args.number_of_samples)
+        central_attr_weights = central_attr_weights.head(args.number_of_samples)
+        central_attr_abs = central_attr_abs.head(args.number_of_samples)
         if is_simulated:
             truth_attribution_table = truth_attribution_table.head(args.number_of_samples)
 
+    # Central attribution tables on both scales: relative (weights) and absolute (counts)
+    central_by_scale = {
+        'weights': central_attr_weights,
+        'abs_mutations': central_attr_abs,
+    }
+
     # Get samples and signatures
-    samples = central_attribution.index.tolist()
+    samples = central_attr_weights.index.tolist()
     signatures_to_consider = list(central_attr_abs.columns)
     signatures = signatures[signatures_to_consider]
     stat_metrics = central_stat_table.columns.tolist()
@@ -332,37 +347,68 @@ def main():
     acting_signatures = []
     if is_simulated:
         acting_signatures = [
-            sig for sig in truth_attribution_table.columns 
+            sig for sig in truth_attribution_table.columns
             if truth_attribution_table[sig].max() > 0
         ]
 
     print('Processing bootstrap samples...')
-    # Process all bootstrap samples
-    attributions_per_sample, attributions_per_signature, stat_metrics_dict = \
+    # Process all bootstrap samples once, reading both relative and absolute tables
+    attributions_per_sample_by_scale, attributions_per_signature_by_scale, stat_metrics_dict = \
         process_bootstrap_samples(
-            args.number_of_b_samples, 
-            bootstrap_files, 
+            args.number_of_b_samples,
+            bootstrap_files,
             samples,
-            signatures_to_consider, 
+            signatures_to_consider,
             stat_metrics
         )
-    
+
     print(f'Bootstrap processing complete. Elapsed: {datetime.now() - start_time}')
 
-    # Calculate confidence intervals
+    # Confidence intervals and attribution distributions, written for BOTH scales
     print('Calculating confidence intervals...')
-    confidence_intervals = calculate_confidence_intervals_vectorized(
-        attributions_per_sample,
-        central_attribution,
-        samples,
-        signatures_to_consider,
-        args.confidence_level
-    )
-    
-    # Calculate pruned attributions (0 where CI includes 0)
+    confidence_intervals_by_scale = {}
+    for scale in ATTRIBUTION_SCALES:
+        ci = calculate_confidence_intervals_vectorized(
+            attributions_per_sample_by_scale[scale],
+            central_by_scale[scale],
+            samples,
+            signatures_to_consider,
+            args.confidence_level
+        )
+        confidence_intervals_by_scale[scale] = ci
+
+        scale_filename = f'{args.dataset_name}_{args.mutation_type}_bootstrap_output_{scale}'
+        ci.to_csv(f'{output_folder}/CIs_{scale_filename}.csv')
+        write_data_to_JSON(
+            attributions_per_sample_by_scale[scale],
+            f'{output_folder}/attributions_per_sample_{scale_filename}.json'
+        )
+        write_data_to_JSON(
+            attributions_per_signature_by_scale[scale],
+            f'{output_folder}/attributions_per_signature_{scale_filename}.json'
+        )
+        # stat metrics are scale-independent, but written under both names so the
+        # plotting scripts can read them for either scale
+        write_data_to_JSON(
+            stat_metrics_dict,
+            f'{output_folder}/stat_metrics_{scale_filename}.json'
+        )
+
+    print(f'Confidence intervals calculated. Elapsed: {datetime.now() - start_time}')
+
+    # The relative (weights) scale is canonical for pruning and the truth studies below
+    confidence_intervals = confidence_intervals_by_scale['weights']
+    attributions_per_sample = attributions_per_sample_by_scale['weights']
+    central_attribution = central_attr_weights
+
+    # Pruned attribution: prune on the CI lower bound, emit absolute counts.
+    # The prune decision is scale-invariant - a signature is zero in the same
+    # bootstrap iterations on both scales, and "percentile == 0" depends only on
+    # the zero pattern, not the magnitudes - so the relative CI is used by
+    # convention and yields the same table as the absolute CI would.
     pruned_attribution_table = pd.DataFrame(
-        index=samples, 
-        columns=signatures_to_consider, 
+        index=samples,
+        columns=signatures_to_consider,
         dtype=int
     )
     for sample in samples:
@@ -373,21 +419,19 @@ def main():
             else:
                 pruned_attribution_table.loc[sample, signature] = \
                     np.around(central_attr_abs.loc[sample, signature])
-    
-    print(f'Confidence intervals calculated. Elapsed: {datetime.now() - start_time}')
 
-    # Calculate signature prevalences
+    # Calculate signature prevalences (presence fraction; identical on both scales)
     print('Calculating signature prevalences...')
     signatures_prevalences = pd.DataFrame(
-        index=samples, 
-        columns=signatures_to_consider, 
+        index=samples,
+        columns=signatures_to_consider,
         dtype=float
     )
     for sample in samples:
         signatures_prevalences.loc[sample] = \
             attributions_per_sample[sample].astype(bool).sum(axis=0)
     signatures_prevalences = signatures_prevalences / args.number_of_b_samples
-    
+
     print(f'Prevalences calculated. Elapsed: {datetime.now() - start_time}')
 
     # Simulated data specific calculations
@@ -532,23 +576,12 @@ def main():
 
     # Write outputs
     print('Writing outputs...')
-    
-    # Common outputs
-    confidence_intervals.to_csv(f'{output_folder}/CIs_{filename}.csv')
+
+    # Shared, scale-independent outputs (the per-scale CIs / attribution
+    # distributions / stat_metrics for both 'weights' and 'abs_mutations' were
+    # already written above).
     signatures_prevalences.to_csv(
         f'{output_folder}/signatures_prevalences_{args.dataset_name}_{args.mutation_type}.csv'
-    )
-    write_data_to_JSON(
-        attributions_per_sample, 
-        f'{output_folder}/attributions_per_sample_{filename}.json'
-    )
-    write_data_to_JSON(
-        attributions_per_signature,
-        f'{output_folder}/attributions_per_signature_{filename}.json'
-    )
-    write_data_to_JSON(
-        stat_metrics_dict, 
-        f'{output_folder}/stat_metrics_{filename}.json'
     )
     pruned_attribution_table.to_csv(
         f'{output_folder}/pruned_attribution_{args.dataset_name}_{args.mutation_type}_abs_mutations.csv'
