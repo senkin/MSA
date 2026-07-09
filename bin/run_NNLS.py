@@ -74,39 +74,72 @@ _IDX_TO_METRIC = {
 }
 
 
-def batched_nnls_shared_b(A, b, column_sets):
-    """Solve NNLS(A[:, cols], b) for each ``cols`` in ``column_sets``.
+def nnls_batched(A, B, masks, b_index=None, out_weights=None, out_fitted=None):
+    """Solve, for each problem ``j``, NNLS(A[:, masks[:, j]], B[:, b_index[j]]).
 
-    Every problem in the batch shares the same target ``b`` and selects columns
-    from the same matrix ``A``. In the leave-one-out (removal) and add-one
-    (addition) cases all problems have the same number of columns, so the batch
-    is uniform.
+    THIS IS THE GPU SWAP POINT. It is the only batched-NNLS entry point that a
+    GPU/cuML kernel needs to implement; every batched solve in this module is
+    expressed through it.
 
-    THIS IS THE GPU SWAP POINT FOR THE OPTIMISATION HOT PATH. The CPU
-    implementation is a tight scipy loop; a batched GPU/cuML NNLS solver can
-    replace this function wholesale (it receives ``A``, ``b`` and the per-problem
-    column sets, i.e. everything a masked batched kernel needs).
+    The batch is taken across *samples*, not across one sample's candidate
+    signature subsets: with N = n_samples (x n_bootstrap) targets and k active
+    signatures each, one call solves up to N*k problems. Batching a single
+    sample's leave-one-out trials instead would give a batch only k <= n_signatures
+    wide, which is too narrow to amortise host<->device transfers.
+
+    The CPU implementation is a tight scipy loop; a batched masked GPU/cuML NNLS
+    kernel can replace this function wholesale.
 
     Parameters
     ----------
-    A : ndarray (n_channels, n_signatures_total)
-    b : ndarray (n_channels,)
-    column_sets : sequence of int index sequences
+    A : ndarray (n_channels, n_signatures)
+        Full signature matrix (shared by all problems).
+    B : ndarray (n_channels, n_targets)
+        Distinct target vectors. Targets are *not* duplicated per problem; the
+        ``b_index`` gather keeps memory at O(n_targets) rather than O(n_problems).
+    masks : ndarray (n_signatures, n_problems), bool
+        Column j selects which columns of A are active for problem j.
+    b_index : ndarray (n_problems,), int, optional
+        Target column of B for each problem. Defaults to the identity mapping
+        (which requires n_problems == n_targets).
+    out_weights : ndarray (n_signatures, n_problems), optional
+        Dense weights, zero outside the mask.
+    out_fitted : ndarray (n_channels, n_problems), optional
 
     Returns
     -------
-    list of ndarray : weights[i] has length len(column_sets[i]).
+    (out_weights, out_fitted)
     """
-    return [nnls(A[:, cols], b)[0] for cols in column_sets]
+    n_problems = masks.shape[1]
+    if b_index is None:
+        b_index = np.arange(n_problems)
+    if out_weights is None:
+        out_weights = np.zeros((A.shape[1], n_problems))
+    if out_fitted is None:
+        out_fitted = np.zeros((A.shape[0], n_problems))
+
+    for j in range(n_problems):
+        cols = np.flatnonzero(masks[:, j])
+        w, _ = nnls(A[:, cols], B[:, b_index[j]])
+        out_weights[:, j] = 0.0
+        out_weights[cols, j] = w
+        out_fitted[:, j] = A[:, cols] @ w
+    return out_weights, out_fitted
 
 
 def batched_nnls_shared_A(A, B):
     """Solve NNLS(A, b) for every column ``b`` of ``B`` (shared design matrix).
 
-    THIS IS THE GPU SWAP POINT FOR NON-OPTIMISED ATTRIBUTION, where every sample
-    is fitted against the same signature matrix: one ``A``, many targets. The CPU
-    implementation is a tight scipy loop; a batched GPU/cuML NNLS solver can
-    replace it wholesale.
+    Used by the non-optimised attribution path, where every sample is fitted
+    against the same signature matrix with no column masking. This is the
+    all-columns-active special case of nnls_batched(), and delegates to it so
+    that there is exactly one batched-NNLS implementation to port to the GPU.
+
+    A dedicated GPU kernel could beat the generic masked one here: with a
+    constant ``A`` and no masking, a factorisation of ``A`` can be computed once
+    and reused across all N solves - impossible in the masked case, where every
+    problem selects a different subset of columns. If that is ever worth
+    exploiting, specialise this function rather than nnls_batched().
 
     Parameters
     ----------
@@ -117,10 +150,132 @@ def batched_nnls_shared_A(A, B):
     -------
     ndarray (n_signatures, n_samples) : weights for each sample (column).
     """
-    weights = np.zeros((A.shape[1], B.shape[1]))
-    for i in range(B.shape[1]):
-        weights[:, i], _ = nnls(A, B[:, i])
+    masks = np.ones((A.shape[1], B.shape[1]), dtype=bool)
+    weights, _ = nnls_batched(A, B, masks)
     return weights
+
+
+def _l2_similarity_batched(targets, fitted, norm_targets):
+    """Vectorised L2_normalised_by_first similarity for a batch of fits.
+
+    Batched counterpart of _similarity_from_fitted() for idx == 8:
+        1 - ||target - fitted|| / ||target||
+    """
+    return 1.0 - np.linalg.norm(targets - fitted, axis=0) / norm_targets
+
+
+def _solve_and_score(sig_values, B, norm_obs, masks, b_index, chunk_size):
+    """Solve a batch of masked NNLS problems and return each fit's similarity.
+
+    Chunked so the (n_channels x n_problems) fitted/residual buffers stay bounded.
+    """
+    n_problems = masks.shape[1]
+    sims = np.empty(n_problems)
+    for start in range(0, n_problems, chunk_size):
+        stop = min(start + chunk_size, n_problems)
+        bi = b_index[start:stop]
+        _, fitted = nnls_batched(sig_values, B, masks[:, start:stop], b_index=bi)
+        sims[start:stop] = _l2_similarity_batched(B[:, bi], fitted, norm_obs[bi])
+    return sims
+
+
+def remove_weak_signatures_batched(sig_values, B, norm_obs, masks,
+                                   weak_threshold=0.01, idx=8, chunk_size=4096):
+    """Sample-transposed greedy leave-one-out removal for a whole batch of samples.
+
+    Mathematically identical to running remove_weak_signatures() on each sample
+    independently: every sample keeps its own mask, its own base similarity and
+    its own stopping decision, and no quantity is ever pooled across samples.
+    Samples drop out of the active set as they converge, so the batch shrinks.
+
+    Each greedy step issues one nnls_batched() call covering the leave-one-out
+    trials of *all* still-active samples.
+
+    Parameters
+    ----------
+    sig_values : (n_channels, n_signatures)
+    B : (n_channels, N) observed spectra, one column per sample
+    norm_obs : (N,) precomputed ||b|| per sample
+    masks : (n_signatures, N) bool, initial active set per sample
+    chunk_size : int, max NNLS problems solved per batched call (memory bound)
+
+    Returns
+    -------
+    masks : (n_signatures, N) bool, final active set per sample
+    """
+    if idx != 8:
+        raise ValueError("Batched removal only supports the L2_normalised_by_first metric")
+
+    masks = masks.copy()
+    n_sig, N = masks.shape
+
+    # Initial base similarity for every sample (fit on its starting mask)
+    base_sim = _solve_and_score(sig_values, B, norm_obs, masks, np.arange(N), chunk_size)
+
+    # A sample stops once it is down to a single signature
+    active = np.flatnonzero(masks.sum(axis=0) > 1)
+
+    # Group samples so that one trial batch stays within chunk_size problems
+    samples_per_group = max(1, chunk_size // max(1, n_sig))
+
+    while active.size:
+        still_active = []
+        for group_start in range(0, active.size, samples_per_group):
+            group = active[group_start:group_start + samples_per_group]
+
+            cols_per_sample = [np.flatnonzero(masks[:, j]) for j in group]
+            counts = np.array([c.size for c in cols_per_sample])
+            offsets = np.zeros(group.size + 1, dtype=np.int64)
+            np.cumsum(counts, out=offsets[1:])
+            n_trials = int(offsets[-1])
+
+            # Build the leave-one-out trials: trial p of sample j drops its p-th active column
+            trial_masks = np.empty((n_sig, n_trials), dtype=bool)
+            trial_bidx = np.empty(n_trials, dtype=np.int64)
+            for s, j in enumerate(group):
+                lo, hi = offsets[s], offsets[s + 1]
+                trial_masks[:, lo:hi] = masks[:, j][:, None]
+                trial_masks[cols_per_sample[s], np.arange(lo, hi)] = False
+                trial_bidx[lo:hi] = j
+
+            sims = _solve_and_score(sig_values, B, norm_obs, trial_masks, trial_bidx, chunk_size)
+
+            for s, j in enumerate(group):
+                lo, hi = offsets[s], offsets[s + 1]
+                # Contribution of each signature = drop in similarity if removed
+                contributions = base_sim[j] - sims[lo:hi]
+                p_weakest = int(np.argmin(contributions))
+                if contributions[p_weakest] < weak_threshold:
+                    masks[cols_per_sample[s][p_weakest], j] = False
+                    # The chosen trial *is* the fit on the new mask, so its
+                    # similarity is exactly the recomputed base similarity.
+                    base_sim[j] = sims[lo + p_weakest]
+                    if masks[:, j].sum() > 1:
+                        still_active.append(j)
+                # else: no signature is weak enough -> this sample has converged
+
+        active = np.asarray(still_active, dtype=np.int64)
+
+    return masks
+
+
+def optimise_signatures_batched(B, norm_obs, sig_values, initial_cols, strategy='removal',
+                                weak_threshold=0.01, similarity_index=-3, chunk_size=4096):
+    """Batched (sample-transposed) signature optimisation.
+
+    Returns a list of per-sample column-index lists (ascending, matching the
+    scalar path's ordering), or None if this strategy/metric combination is not
+    supported by the batched path and the caller should fall back per sample.
+    """
+    idx = similarity_index % 11
+    if strategy != 'removal' or idx != 8:
+        return None
+
+    masks = np.zeros((sig_values.shape[1], B.shape[1]), dtype=bool)
+    masks[initial_cols, :] = True
+    masks = remove_weak_signatures_batched(sig_values, B, norm_obs, masks,
+                                           weak_threshold, idx, chunk_size)
+    return [np.flatnonzero(masks[:, j]).tolist() for j in range(B.shape[1])]
 
 
 def _similarity_from_fitted(observed, fitted, idx, norm_obs):
@@ -153,8 +308,8 @@ def _similarity_from_fitted(observed, fitted, idx, norm_obs):
 def _attribution_similarity(sig_sub, observed, idx, norm_obs):
     """Solve a single NNLS problem and return only the optimisation metric.
 
-    Used for the base/final solves; the per-step candidate batches go through
-    batched_nnls_shared_b() instead.
+    Used by the scalar (per-sample) optimisation path for its base/final solves.
+    The GPU path scores whole batches through _solve_and_score() instead.
     """
     weights, _ = nnls(sig_sub, observed)
     fitted = sig_sub @ weights
@@ -245,10 +400,12 @@ def remove_weak_signatures(observed, norm_obs, sig_values, active_cols, col_name
         print(f'Current signatures: {[col_names[c] for c in active_cols]}')
 
     while len(active_cols) > 1:
-        # Batched leave-one-out solve: each candidate drops one signature, all
-        # sharing the same target b (the GPU swap point for the hot path).
+        # Leave-one-out candidates: each drops one signature, all sharing the same
+        # target b. (In GPU mode this loop is replaced wholesale by the
+        # sample-transposed remove_weak_signatures_batched(), which batches across
+        # samples instead of across one sample's candidates.)
         column_sets = [active_cols[:p] + active_cols[p + 1:] for p in range(len(active_cols))]
-        candidate_weights = batched_nnls_shared_b(sig_values, observed, column_sets)
+        candidate_weights = [nnls(sig_values[:, cols], observed)[0] for cols in column_sets]
 
         # Contribution of each signature = drop in similarity if it is removed.
         contributions = np.empty(len(active_cols))
@@ -298,10 +455,9 @@ def add_strong_signatures(observed, norm_obs, sig_values, active_cols, candidate
         print(f'Starting addition loop. Base similarity: {base_similarity}')
 
     while remaining:
-        # Batched add-one solve: each candidate adds one signature, all sharing
-        # the same target b (the GPU swap point for the hot path).
+        # Add-one candidates: each adds one signature, all sharing the same target b.
         column_sets = [active_cols + [c] for c in remaining]
-        candidate_weights = batched_nnls_shared_b(sig_values, observed, column_sets)
+        candidate_weights = [nnls(sig_values[:, cols], observed)[0] for cols in column_sets]
 
         contributions = np.empty(len(remaining))
         for p, cols in enumerate(column_sets):
@@ -433,6 +589,13 @@ def process_samples_batch(input_mutations, signatures, sel_sig_nums, args):
         residuals_arr[:, s_i] = residuals
         fitted_arr[:, s_i] = fitted
 
+    # GPU mode: run the greedy optimisation transposed across samples, so each
+    # batched NNLS call covers the leave-one-out trials of every active sample.
+    use_gpu_batched = (args.optimise_signatures
+                       and getattr(args, 'use_gpu', False)
+                       and args.optimisation_strategy == 'removal'
+                       and not initial_signatures.empty)
+
     if not args.optimise_signatures and not initial_signatures.empty:
         # Non-optimised: every sample shares the same signature matrix, so all
         # NNLS solves go through a single batched call (the shared-A GPU swap
@@ -458,6 +621,46 @@ def process_samples_batch(input_mutations, signatures, sel_sig_nums, args):
                     perform_signature_attribution(B[:, j], initial_signatures,
                                                 normalise_mutations=args.normalise_mutations,
                                                 verbose=args.verbose, weights=weights_batch[:, j])
+                _store(s_i, cols, normalised_weights, mutation_numbers, stat_info, residuals, fitted)
+
+    elif use_gpu_batched:
+        all_names = list(signatures.columns)
+        name_to_col = {name: i for i, name in enumerate(all_names)}
+        sig_values = np.asarray(signatures.values, dtype=float)
+        initial_cols = [name_to_col[name] for name in initial_signatures.columns]
+
+        valid_s_i, valid_b = [], []
+        for s_i, sample in enumerate(samples):
+            selected_mutations = input_mutations[sample].values
+            if selected_mutations.sum() <= 0:
+                warnings.warn(f"Sample {sample}: Zero mutations, skipping")
+                continue
+            valid_s_i.append(s_i)
+            valid_b.append(np.asarray(selected_mutations, dtype=float))
+
+        if valid_b:
+            B = np.column_stack(valid_b)
+            # match the scalar path's per-sample norm computation exactly
+            norm_obs = np.array([np.linalg.norm(B[:, j]) for j in range(B.shape[1])])
+
+            per_sample_cols = optimise_signatures_batched(
+                B, norm_obs, sig_values, initial_cols,
+                strategy=args.optimisation_strategy,
+                weak_threshold=args.weak_threshold,
+                chunk_size=getattr(args, 'gpu_batch_size', 4096))
+
+            for j, s_i in enumerate(valid_s_i):
+                final_names = [all_names[c] for c in per_sample_cols[j]]
+                if not final_names:
+                    continue
+                final_signatures = signatures.loc[:, final_names]
+
+                normalised_weights, mutation_numbers, fitted, residuals, stat_info = \
+                    perform_signature_attribution(B[:, j], final_signatures,
+                                                normalise_mutations=args.normalise_mutations,
+                                                verbose=args.verbose)
+
+                cols = [col_pos[name] for name in final_names]
                 _store(s_i, cols, normalised_weights, mutation_numbers, stat_info, residuals, fitted)
     else:
         for s_i, sample in enumerate(samples):
@@ -534,6 +737,12 @@ if __name__ == '__main__':
     parser.add_argument("--bootstrap_output_suffix", dest="bootstrap_output_suffix", default='',
                        help="String inserted into per-iteration bootstrap output filenames "
                             "(e.g. '<weak>_<strong>' thresholds), to match downstream expectations.")
+    parser.add_argument("--use_gpu", dest="use_gpu", action="store_true",
+                       help="Use the sample-transposed batched optimisation path (removal strategy), "
+                            "which issues one large masked NNLS batch per greedy step across all "
+                            "still-active samples. Intended for GPU offloading via nnls_batched().")
+    parser.add_argument("--gpu_batch_size", dest="gpu_batch_size", default=4096, type=int,
+                       help="Maximum number of NNLS problems solved per batched call (memory bound).")
 
     args = parser.parse_args()
 

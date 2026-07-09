@@ -1,5 +1,9 @@
 // modules/nnls.nf
 
+// In GPU mode, run_NNLS.py runs the greedy signature optimisation transposed
+// across samples (one large masked NNLS batch per greedy step) via nnls_batched().
+def gpu_flag = params.use_GPU ? "--use_gpu" : ''
+
 // Unoptimized NNLS workflow
 workflow NNLS_unoptimized_workflow {
     take:
@@ -117,7 +121,7 @@ workflow NNLS_optimized_workflow {
             -p ${signature_prefix} --optimisation_strategy ${params.optimisation_strategy} \\
             -W ${weak_threshold} -S ${strong_threshold} \\
             -i ${params.output_path}/temp/output_tables -s ${params.output_path}/temp/signature_tables \\
-            -o "./" -x --add_suffix
+            -o "./" -x --add_suffix ${gpu_flag}
         """
     }
     
@@ -208,7 +212,7 @@ workflow NNLS_bootstrap_workflow {
             --optimisation_strategy ${params.optimisation_strategy} \\
             --bootstrap_method ${params.bootstrap_method} \\
             -W ${weak_threshold} -S ${strong_threshold} --add_suffix \\
-            -p ${signature_prefix} -i ${params.output_path}/temp/output_tables -s ${params.output_path}/temp/signature_tables -o "./"
+            -p ${signature_prefix} -i ${params.output_path}/temp/output_tables -s ${params.output_path}/temp/signature_tables -o "./" ${gpu_flag}
         """
     }
 
@@ -275,8 +279,8 @@ workflow FINAL_NNLS_workflow {
         python ${workflow.projectDir}/bin/run_NNLS.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \\
             --optimisation_strategy ${params.optimisation_strategy} \\
             -W `< ${weak_penalty}` -S `< ${strong_penalty}` -n ${params.number_of_samples} \\
-            -p ${signature_prefix} -i ${params.output_path}/temp/input_tables -s ${params.output_path}/temp/signature_tables -o "./"
-        
+            -p ${signature_prefix} -i ${params.output_path}/temp/input_tables -s ${params.output_path}/temp/signature_tables -o "./" ${gpu_flag}
+
         # Copy residuals and fitted values back to input tables
         cp ${dataset}/output_${dataset}_${mutation_type}_residuals.csv ${params.output_path}/temp/input_tables/${dataset}/
         cp ${dataset}/output_${dataset}_${mutation_type}_fitted_values.csv ${params.output_path}/temp/input_tables/${dataset}/
@@ -345,7 +349,7 @@ workflow FINAL_NNLS_BOOTSTRAP_workflow {
             -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \\
             --optimisation_strategy ${params.optimisation_strategy} --bootstrap_method ${params.bootstrap_method} \\
             -W `< ${weak_penalty}` -S `< ${strong_penalty}` -n ${params.number_of_samples} \\
-            -p ${signature_prefix} -i ${params.output_path}/temp/input_tables -s ${params.output_path}/temp/signature_tables -o "./"
+            -p ${signature_prefix} -i ${params.output_path}/temp/input_tables -s ${params.output_path}/temp/signature_tables -o "./" ${gpu_flag}
         """
     }
 
