@@ -77,18 +77,16 @@ _IDX_TO_METRIC = {
 def nnls_batched(A, B, masks, b_index=None, out_weights=None, out_fitted=None):
     """Solve, for each problem ``j``, NNLS(A[:, masks[:, j]], B[:, b_index[j]]).
 
-    THIS IS THE GPU SWAP POINT. It is the only batched-NNLS entry point that a
-    GPU/cuML kernel needs to implement; every batched solve in this module is
-    expressed through it.
+    This is the general batched primitive and the CPU implementation behind
+    batched_solve_and_score(). It is NOT the GPU swap point: the optimisation hot
+    path never consumes ``out_weights`` or ``out_fitted``, only the single
+    similarity scalar that batched_solve_and_score() reduces them to. Returning
+    the full fitted matrix costs n_channels * 8 bytes per problem to deliver 8
+    bytes of signal (a 4608:1 amplification at SBS-4608), so a GPU backend should
+    fuse the reduction and implement batched_solve_and_score() instead.
 
-    The batch is taken across *samples*, not across one sample's candidate
-    signature subsets: with N = n_samples (x n_bootstrap) targets and k active
-    signatures each, one call solves up to N*k problems. Batching a single
-    sample's leave-one-out trials instead would give a batch only k <= n_signatures
-    wide, which is too narrow to amortise host<->device transfers.
-
-    The CPU implementation is a tight scipy loop; a batched masked GPU/cuML NNLS
-    kernel can replace this function wholesale.
+    This function is still needed by the callers that genuinely want weights:
+    batched_nnls_shared_A() (non-optimised attribution).
 
     Parameters
     ----------
@@ -132,14 +130,16 @@ def batched_nnls_shared_A(A, B):
 
     Used by the non-optimised attribution path, where every sample is fitted
     against the same signature matrix with no column masking. This is the
-    all-columns-active special case of nnls_batched(), and delegates to it so
-    that there is exactly one batched-NNLS implementation to port to the GPU.
+    all-columns-active special case of nnls_batched() and delegates to it.
 
-    A dedicated GPU kernel could beat the generic masked one here: with a
-    constant ``A`` and no masking, a factorisation of ``A`` can be computed once
-    and reused across all N solves - impossible in the masked case, where every
-    problem selects a different subset of columns. If that is ever worth
-    exploiting, specialise this function rather than nnls_batched().
+    Unlike the optimisation hot path, this caller genuinely needs the weights, so
+    it cannot go through batched_solve_and_score(). It is also a minor workload -
+    one run per dataset and mutation type - so it is a low-value GPU target.
+
+    Should it ever be worth accelerating: with a constant ``A`` and no masking, a
+    factorisation of ``A`` can be computed once and reused across all N solves -
+    impossible in the masked case, where every problem selects a different subset
+    of columns. Specialise this function if so, not nnls_batched().
 
     Parameters
     ----------
@@ -164,17 +164,54 @@ def _l2_similarity_batched(targets, fitted, norm_targets):
     return 1.0 - np.linalg.norm(targets - fitted, axis=0) / norm_targets
 
 
-def _solve_and_score(sig_values, B, norm_obs, masks, b_index, chunk_size):
+def batched_solve_and_score(A, B, norm_obs, masks, b_index, chunk_size=4096):
     """Solve a batch of masked NNLS problems and return each fit's similarity.
 
-    Chunked so the (n_channels x n_problems) fitted/residual buffers stay bounded.
+    THIS IS THE GPU SWAP POINT. It is the whole of the optimisation hot path:
+    ~99.9% of all NNLS solves in a run happen inside this call, and it is the only
+    function a GPU/cuML backend needs to implement.
+
+    For each problem j it solves NNLS(A[:, masks[:, j]], B[:, b_index[j]]) and
+    returns a single scalar, the L2_normalised_by_first similarity of the fit:
+
+        sims[j] = 1 - ||B[:, b_index[j]] - fitted_j|| / norm_obs[b_index[j]]
+
+    The weights and the fitted vector are *internal* - the greedy caller never
+    sees them. A backend should therefore fuse the solve with the residual-norm
+    reduction and keep both on the device, returning only ``sims``. That is worth
+    a great deal at high context: handing back ``fitted`` instead would move
+    n_channels * 8 bytes per problem (~1.8 TB over a 1000-bootstrap SBS-4608 run)
+    to deliver 8 bytes of signal per problem (~0.4 GB).
+
+    ``A``, ``B`` and ``norm_obs`` are loop-invariant across the greedy steps of a
+    given batch, so a backend is free to keep them device-resident between calls.
+
+    Parameters
+    ----------
+    A : ndarray (n_channels, n_signatures)
+        Full signature matrix, shared by all problems.
+    B : ndarray (n_channels, n_targets)
+        Distinct target spectra; not duplicated per problem.
+    norm_obs : ndarray (n_targets,)
+        ||b|| for each target, precomputed.
+    masks : ndarray (n_signatures, n_problems), bool
+        Column j selects the active signatures of problem j.
+    b_index : ndarray (n_problems,), int
+        Target column of B for each problem.
+    chunk_size : int
+        CPU implementation detail: bounds the intermediate (n_channels x chunk)
+        buffers. A GPU backend may ignore it and choose its own tiling.
+
+    Returns
+    -------
+    ndarray (n_problems,) : similarity of each fit to its target.
     """
     n_problems = masks.shape[1]
     sims = np.empty(n_problems)
     for start in range(0, n_problems, chunk_size):
         stop = min(start + chunk_size, n_problems)
         bi = b_index[start:stop]
-        _, fitted = nnls_batched(sig_values, B, masks[:, start:stop], b_index=bi)
+        _, fitted = nnls_batched(A, B, masks[:, start:stop], b_index=bi)
         sims[start:stop] = _l2_similarity_batched(B[:, bi], fitted, norm_obs[bi])
     return sims
 
@@ -188,8 +225,9 @@ def remove_weak_signatures_batched(sig_values, B, norm_obs, masks,
     its own stopping decision, and no quantity is ever pooled across samples.
     Samples drop out of the active set as they converge, so the batch shrinks.
 
-    Each greedy step issues one nnls_batched() call covering the leave-one-out
-    trials of *all* still-active samples.
+    Each greedy step issues one batched_solve_and_score() call covering the
+    leave-one-out trials of *all* still-active samples - this is where essentially
+    all of the run's NNLS work happens, and the only place a GPU backend is needed.
 
     Parameters
     ----------
@@ -210,7 +248,7 @@ def remove_weak_signatures_batched(sig_values, B, norm_obs, masks,
     n_sig, N = masks.shape
 
     # Initial base similarity for every sample (fit on its starting mask)
-    base_sim = _solve_and_score(sig_values, B, norm_obs, masks, np.arange(N), chunk_size)
+    base_sim = batched_solve_and_score(sig_values, B, norm_obs, masks, np.arange(N), chunk_size)
 
     # A sample stops once it is down to a single signature
     active = np.flatnonzero(masks.sum(axis=0) > 1)
@@ -238,7 +276,7 @@ def remove_weak_signatures_batched(sig_values, B, norm_obs, masks,
                 trial_masks[cols_per_sample[s], np.arange(lo, hi)] = False
                 trial_bidx[lo:hi] = j
 
-            sims = _solve_and_score(sig_values, B, norm_obs, trial_masks, trial_bidx, chunk_size)
+            sims = batched_solve_and_score(sig_values, B, norm_obs, trial_masks, trial_bidx, chunk_size)
 
             for s, j in enumerate(group):
                 lo, hi = offsets[s], offsets[s + 1]
@@ -309,7 +347,7 @@ def _attribution_similarity(sig_sub, observed, idx, norm_obs):
     """Solve a single NNLS problem and return only the optimisation metric.
 
     Used by the scalar (per-sample) optimisation path for its base/final solves.
-    The GPU path scores whole batches through _solve_and_score() instead.
+    The GPU path scores whole batches through batched_solve_and_score() instead.
     """
     weights, _ = nnls(sig_sub, observed)
     fitted = sig_sub @ weights
@@ -740,7 +778,8 @@ if __name__ == '__main__':
     parser.add_argument("--use_gpu", dest="use_gpu", action="store_true",
                        help="Use the sample-transposed batched optimisation path (removal strategy), "
                             "which issues one large masked NNLS batch per greedy step across all "
-                            "still-active samples. Intended for GPU offloading via nnls_batched().")
+                            "still-active samples. Intended for GPU offloading via "
+                            "batched_solve_and_score().")
     parser.add_argument("--gpu_batch_size", dest="gpu_batch_size", default=4096, type=int,
                        help="Maximum number of NNLS problems solved per batched call (memory bound).")
 
