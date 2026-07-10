@@ -82,8 +82,8 @@ def nnls_batched(A, B, masks, b_index=None, out_weights=None, out_fitted=None):
     path never consumes ``out_weights`` or ``out_fitted``, only the single
     similarity scalar that batched_solve_and_score() reduces them to. Returning
     the full fitted matrix costs n_channels * 8 bytes per problem to deliver 8
-    bytes of signal (a 4608:1 amplification at SBS-4608), so a GPU backend should
-    fuse the reduction and implement batched_solve_and_score() instead.
+    bytes of signal (an n_channels:1 amplification), so a GPU backend should fuse
+    the reduction and implement batched_solve_and_score() instead.
 
     This function is still needed by the callers that genuinely want weights:
     batched_nnls_shared_A() (non-optimised attribution).
@@ -178,13 +178,16 @@ def batched_solve_and_score(A, B, norm_obs, masks, b_index, chunk_size=4096):
 
     The weights and the fitted vector are *internal* - the greedy caller never
     sees them. A backend should therefore fuse the solve with the residual-norm
-    reduction and keep both on the device, returning only ``sims``. That is worth
-    a great deal at high context: handing back ``fitted`` instead would move
-    n_channels * 8 bytes per problem (~1.8 TB over a 1000-bootstrap SBS-4608 run)
-    to deliver 8 bytes of signal per problem (~0.4 GB).
+    reduction and keep both on the device, returning only ``sims``. Handing back
+    ``fitted`` instead would move n_channels * 8 bytes per problem to deliver 8
+    bytes of signal: an amplification of exactly n_channels (96x at SBS-96, 4608x
+    at SBS-4608), independent of the number of signatures. It would also force the
+    host to reduce all of that data. Both costs grow with n_signatures, since the
+    greedy issues ~k*(k+1)/2 problems per sample.
 
     ``A``, ``B`` and ``norm_obs`` are loop-invariant across the greedy steps of a
-    given batch, so a backend is free to keep them device-resident between calls.
+    given batch, so a backend is free to keep them device-resident between calls;
+    only ``masks``/``b_index`` change per call, and only ``sims`` comes back.
 
     Parameters
     ----------
