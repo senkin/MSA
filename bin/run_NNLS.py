@@ -164,6 +164,150 @@ def _l2_similarity_batched(targets, fitted, norm_targets):
     return 1.0 - np.linalg.norm(targets - fitted, axis=0) / norm_targets
 
 
+# GPU backend for batched_solve_and_score(). None keeps the pure-CPU/scipy path;
+# main() replaces it with a _GpuBatchedSolver when --use_gpu is passed. Kept as a
+# module global so the deep greedy call sites need no extra plumbing.
+_GPU_SOLVER = None
+
+# Process-global GPU environment, set up once by _init_gpu_backend(). The stream is
+# held here so it is not garbage-collected while it is the active cupy stream.
+_GPU_INITIALISED = False
+_GPU_STREAM = None
+
+
+def _init_gpu_backend():
+    """Bring up an RMM pool and put cupy on raft's stream (once per process).
+
+    Mirrors the reference setup in bin/using_nnls_example.py:
+
+    * A bounded RMM pool routes cupy's allocations so the greedy's many short-lived
+      device buffers do not thrash cudaMalloc/cudaFree. The cap comes from the
+      launcher via RMM_POOL_SIZE_MIB (MiB, already divided across the processes
+      sharing the GPU); absent that it defaults to 60% of total memory. It grows on
+      demand, not up front.
+    * cupy is switched onto the per-thread default stream (ptds), the same stream
+      raft's Handle() uses. Sharing one stream keeps cupy's H2D copies / gathers
+      ordered before the cuML kernels that read them; on separate streams that race
+      surfaces intermittently as CUDA_ERROR_ILLEGAL_ADDRESS at handle.sync().
+    """
+    global _GPU_INITIALISED, _GPU_STREAM
+    if _GPU_INITIALISED:
+        return
+    import rmm
+    from rmm.allocators.cupy import rmm_cupy_allocator
+    import cupy as cp
+
+    env_mib = os.environ.get("RMM_POOL_SIZE_MIB")
+    if env_mib is not None:
+        pool_size = int(float(env_mib) * (1 << 20))
+    else:
+        _, total_memory = cp.cuda.runtime.memGetInfo()
+        pool_size = int(total_memory * 0.6)
+    rmm.reinitialize(pool_allocator=True, initial_pool_size=0, maximum_pool_size=pool_size)
+    cp.cuda.set_allocator(rmm_cupy_allocator)
+
+    _GPU_STREAM = cp.cuda.Stream(ptds=True)
+    _GPU_STREAM.use()
+    _GPU_INITIALISED = True
+
+
+class _GpuBatchedSolver:
+    """cuML-backed implementation of batched_solve_and_score().
+
+    Wraps ``cuml.solvers.nnls_batched`` (rapidsai/cuml PR #8402), whose signature
+    and semantics match our own nnls_batched(): ``nnls_batched(A, B, masks,
+    b_index=..., compute_fitted=True) -> (X, fitted)``, with A shared, B gathered by
+    b_index and masks column-major (n_signatures, n_problems).
+
+    Follows the GPU setup in bin/using_nnls_example.py: a bounded RMM pool and cupy
+    on raft's per-thread default stream (see _init_gpu_backend), plus A / B / ||b||
+    kept device-resident for as long as the same (A, B, norm_obs) objects keep
+    arriving - they are loop-invariant across the greedy steps of one attribution,
+    so each uploads at most once per attribution. The residual-norm reduction is
+    fused on the device, so only the (n_problems,) similarity vector returns to the
+    host (fitted never leaves the GPU).
+
+    Precision (--gpu_precision, see configure_gpu_backend):
+      'fp64'  - solve and score in fp64 (matches the example run on our float64
+                arrays; closest to the CPU reference).
+      'fp32'  - solve and score in fp32 (fastest; may flip a small fraction of
+                borderline selections vs the CPU reference).
+      'mixed' - solve in fp32 (the throughput win) but score in fp64: the greedy
+                compares tiny similarity differences (base_sim - trial_sim) that are
+                cancellation-prone, so B / ||b|| are also kept in fp64 for the
+                reduction. Default.
+    """
+
+    def __init__(self, precision='mixed'):
+        _init_gpu_backend()
+        from cuml.solvers import nnls_batched as cuml_nnls_batched
+        self._nnls_batched = cuml_nnls_batched
+
+        if precision == 'fp64':
+            self._solve_dtype, self._score_dtype = np.float64, np.float64
+        elif precision == 'fp32':
+            self._solve_dtype, self._score_dtype = np.float32, np.float32
+        elif precision == 'mixed':
+            self._solve_dtype, self._score_dtype = np.float32, np.float64
+        else:
+            raise ValueError(f"Unknown GPU precision '{precision}' (use mixed, fp32 or fp64)")
+        self._mixed = self._solve_dtype != self._score_dtype
+        self._cache = {}
+
+    def _resident(self, A, B, norm_obs):
+        """Device copies of the loop-invariant A, B, ||b||, cached by identity.
+
+        A new (A, B, norm_obs) triple evicts the previous generation so device
+        memory stays bounded; the host objects are pinned in the cache so their
+        id() cannot be reused while cached. In 'mixed' mode B is kept in both the
+        solve dtype (fp32) and the score dtype (fp64).
+        """
+        import cupy as cp
+        gen = (id(A), id(B), id(norm_obs))
+        if self._cache.get("gen") != gen:
+            self._cache.clear()
+            self._cache["gen"] = gen
+            self._cache["refs"] = (A, B, norm_obs)
+            self._cache["A"] = cp.asfortranarray(cp.asarray(A, dtype=self._solve_dtype))
+            self._cache["B_solve"] = cp.asfortranarray(cp.asarray(B, dtype=self._solve_dtype))
+            self._cache["B_score"] = (self._cache["B_solve"] if not self._mixed
+                                      else cp.asarray(B, dtype=self._score_dtype))
+            self._cache["norm"] = cp.asarray(norm_obs, dtype=self._score_dtype)
+        return (self._cache["A"], self._cache["B_solve"],
+                self._cache["B_score"], self._cache["norm"])
+
+    def solve_and_score(self, A, B, norm_obs, masks, b_index, chunk_size):
+        import cupy as cp
+        A_dev, B_solve, B_score, norm_dev = self._resident(A, B, norm_obs)
+
+        n_problems = masks.shape[1]
+        sims = np.empty(n_problems)
+        for start in range(0, n_problems, chunk_size):
+            stop = min(start + chunk_size, n_problems)
+            # Our masks are C-contiguous, so force F-contiguity on the device (small,
+            # boolean) - cuML wants column-major masks and reads a block per problem.
+            masks_dev = cp.asfortranarray(cp.asarray(masks[:, start:stop], dtype=cp.uint8))
+            bi_dev = cp.asarray(b_index[start:stop])
+            _, fitted = self._nnls_batched(A_dev, B_solve, masks_dev,
+                                           b_index=bi_dev, compute_fitted=True)
+            if self._mixed:
+                fitted = fitted.astype(self._score_dtype, copy=False)
+            resid = cp.linalg.norm(B_score[:, bi_dev] - fitted, axis=0)
+            sims[start:stop] = cp.asnumpy(1.0 - resid / norm_dev[bi_dev])
+        return sims
+
+
+def configure_gpu_backend(precision='mixed'):
+    """Enable the cuML GPU backend for batched_solve_and_score().
+
+    Called once from main() when --use_gpu is set. Construction is deferred to here
+    (not import time) so that importing this module, and the whole CPU path, never
+    require cupy/cuml to be installed. See _GpuBatchedSolver for the precision modes.
+    """
+    global _GPU_SOLVER
+    _GPU_SOLVER = _GpuBatchedSolver(precision=precision)
+
+
 def batched_solve_and_score(A, B, norm_obs, masks, b_index, chunk_size=4096):
     """Solve a batch of masked NNLS problems and return each fit's similarity.
 
@@ -209,6 +353,12 @@ def batched_solve_and_score(A, B, norm_obs, masks, b_index, chunk_size=4096):
     -------
     ndarray (n_problems,) : similarity of each fit to its target.
     """
+    if _GPU_SOLVER is not None:
+        # cuML backend: solve + fused residual-norm reduction on the device, with
+        # A/B/norm_obs kept resident across greedy steps and the batch tiled by
+        # chunk_size (device-memory bound, as on the CPU path).
+        return _GPU_SOLVER.solve_and_score(A, B, norm_obs, masks, b_index, chunk_size)
+
     n_problems = masks.shape[1]
     sims = np.empty(n_problems)
     for start in range(0, n_problems, chunk_size):
@@ -785,6 +935,11 @@ if __name__ == '__main__':
                             "batched_solve_and_score().")
     parser.add_argument("--gpu_batch_size", dest="gpu_batch_size", default=4096, type=int,
                        help="Maximum number of NNLS problems solved per batched call (memory bound).")
+    parser.add_argument("--gpu_precision", dest="gpu_precision", default='mixed',
+                       choices=['mixed', 'fp32', 'fp64'],
+                       help="Floating-point precision for the cuML GPU backend: 'mixed' "
+                            "(default) solves in fp32 and scores in fp64; 'fp32'/'fp64' use "
+                            "one dtype throughout. Ignored unless --use_gpu is set.")
 
     args = parser.parse_args()
 
@@ -861,6 +1016,12 @@ if __name__ == '__main__':
     num_ref_sigs = signatures.shape[1]
     sel_sig_nums = list(range(num_ref_sigs))
     print(f"Analyzing signatures: {signatures.columns[sel_sig_nums].tolist()}")
+
+    # Bring up the cuML GPU backend once, before any solving. Kept behind --use_gpu
+    # so the import (cupy/cuml) is only required in GPU processes.
+    if getattr(args, 'use_gpu', False):
+        configure_gpu_backend(args.gpu_precision)
+        print(f"GPU backend enabled (cuML), precision: {args.gpu_precision}")
 
     if args.n_bootstrap > 0:
         # ===== In-process bootstrap loop (P3) =====

@@ -1,8 +1,9 @@
 // modules/nnls.nf
 
 // In GPU mode, run_NNLS.py runs the greedy signature optimisation transposed
-// across samples (one large masked NNLS batch per greedy step) via nnls_batched().
-def gpu_flag = params.use_GPU ? "--use_gpu" : ''
+// across samples (one large masked NNLS batch per greedy step), offloaded to the
+// cuML batched NNLS solver via batched_solve_and_score().
+def gpu_flag = params.use_GPU ? "--use_gpu --gpu_precision ${params.gpu_precision} --gpu_batch_size ${params.gpu_batch_size}" : ''
 
 // Unoptimized NNLS workflow
 workflow NNLS_unoptimized_workflow {
@@ -74,6 +75,7 @@ workflow NNLS_optimized_workflow {
     // Optimized NNLS process
     process run_optimized_NNLS {
         tag "${mutation_type}/${dataset}/${weak_threshold}/${strong_threshold}"
+        label 'gpu_nnls'
         publishDir "${params.output_path}/outputs_optimisation", mode: 'copy', overwrite: true
         
         input:
@@ -163,6 +165,7 @@ workflow NNLS_bootstrap_workflow {
     // chosen by the caller depending on params.use_GPU (see below).
     process run_bootstrap_NNLS {
         tag "${mutation_type}/${dataset}/${weak_threshold}/${strong_threshold}/${start_index}"
+        label 'gpu_nnls'
         publishDir "${params.output_path}/outputs_optimisation"
 
         input:
@@ -252,6 +255,7 @@ workflow FINAL_NNLS_workflow {
     // Simple final NNLS process using penalty files directly
     process run_final_NNLS {
         tag "${mutation_type}/${dataset}"
+        label 'gpu_nnls'
         publishDir "${params.output_path}/output_tables", mode: 'copy', overwrite: true
         
         input:
@@ -320,6 +324,7 @@ workflow FINAL_NNLS_BOOTSTRAP_workflow {
     // n_per_task - 1. Tasks-vs-iterations split is chosen by params.use_GPU below.
     process run_final_bootstrap_NNLS {
         tag "${mutation_type}/${dataset}/${start_index}"
+        label 'gpu_nnls'
         publishDir "${params.output_path}/output_tables", mode: 'copy', overwrite: true
 
         input:
