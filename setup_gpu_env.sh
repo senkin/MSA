@@ -9,8 +9,9 @@
 # Do NOT run it on a login/head node. The CUDA toolkit (nvcc) comes from the conda
 # env, so no system CUDA install is needed, but a matching NVIDIA driver must exist.
 #
-# When it finishes, set in nextflow.config (or pass --gpu_conda_env):
-#     gpu_conda_env = '<ENV_NAME>'        # default: all_cuda-133_arch-x86_64
+# When it finishes, set in nextflow.config (or pass --gpu_conda_env) to the FULL
+# ENV PATH it prints (e.g. ~/miniforge3/envs/all_cuda-133_arch-x86_64) - a bare name
+# would be treated by Nextflow's conda directive as a package to install.
 #
 # It is idempotent: an existing clone or conda env is reused (delete them to rebuild).
 
@@ -103,7 +104,14 @@ else
   "$SOLVER_EXE" env create -n "$ENV_NAME" -f "$ENV_YAML"
 fi
 
+# conda's activation hooks are not 'set -u' clean - the cuda-nvcc hook references
+# NVCC_PREPEND_FLAGS without a default, which aborts under nounset. Relax it here.
+set +u
 conda activate "$ENV_NAME"
+set -u
+# Full env path - this, NOT the bare name, is what gpu_conda_env must be set to:
+# Nextflow's conda directive treats a bare name as a package to install.
+ENV_PREFIX="${CONDA_PREFIX:-$ENV_NAME}"
 
 # --- 3. build + install cuML into the env ----------------------------------
 echo ">>> Building libcuml + cuml (this is the slow part)"
@@ -154,7 +162,8 @@ cat <<EOF
 
 >>> Done. In nextflow.config (or via --gpu_conda_env) set:
         use_GPU       = true
-        gpu_conda_env = '$ENV_NAME'
-    and run with a conda-enabled profile (e.g. -profile conda) so the labelled
-    NNLS processes pick up this env.
+        gpu_conda_env = '$ENV_PREFIX'
+    (use this full path, not the bare env name - Nextflow's conda directive treats
+    a bare name as a package to install). Run with a conda-enabled profile
+    (e.g. -profile conda) so the labelled NNLS processes pick up this env.
 EOF

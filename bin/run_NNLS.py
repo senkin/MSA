@@ -203,6 +203,7 @@ def _init_gpu_backend():
     else:
         _, total_memory = cp.cuda.runtime.memGetInfo()
         pool_size = int(total_memory * 0.6)
+    pool_size -= pool_size % 256  # RMM requires the pool size to be a multiple of 256 bytes
     rmm.reinitialize(pool_allocator=True, initial_pool_size=0, maximum_pool_size=pool_size)
     cp.cuda.set_allocator(rmm_cupy_allocator)
 
