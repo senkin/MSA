@@ -173,12 +173,26 @@ _GPU_SOLVER = None
 # held here so it is not garbage-collected while it is the active cupy stream.
 _GPU_INITIALISED = False
 _GPU_STREAM = None
+# Device-memory ceiling for GPU allocations (the RMM pool cap); suggest_chunk() sizes
+# the NNLS batch against this.
+_GPU_POOL_BYTES = 0
+
+# Auto chunk-size knobs (used only when --gpu_batch_size <= 0). _CHUNK_MEM_FRACTION is
+# the share of the RMM pool one batched call's transient allocations may use (the rest
+# covers the resident A/B/||b|| copies, cuML overhead and fragmentation);
+# _CHUNK_WORKSPACE_FACTOR is the headroom multiplier on the estimate of cuML's
+# per-problem Lawson-Hanson workspace, which we cannot measure directly. Raise the
+# fraction / lower the factor to push bigger batches once calibrated on a real card.
+_CHUNK_MEM_FRACTION = 0.5
+_CHUNK_WORKSPACE_FACTOR = 3.0
+_CHUNK_MIN = 256
+_CHUNK_MAX = 1 << 20
 
 
 def _init_gpu_backend():
     """Bring up an RMM pool and put cupy on raft's stream (once per process).
 
-    Mirrors the reference setup in bin/using_nnls_example.py:
+    Mirrors the reference GPU setup from the cuML batched-NNLS PR (rapidsai/cuml#8402):
 
     * A bounded RMM pool routes cupy's allocations so the greedy's many short-lived
       device buffers do not thrash cudaMalloc/cudaFree. The cap comes from the
@@ -190,7 +204,7 @@ def _init_gpu_backend():
       ordered before the cuML kernels that read them; on separate streams that race
       surfaces intermittently as CUDA_ERROR_ILLEGAL_ADDRESS at handle.sync().
     """
-    global _GPU_INITIALISED, _GPU_STREAM
+    global _GPU_INITIALISED, _GPU_STREAM, _GPU_POOL_BYTES
     if _GPU_INITIALISED:
         return
     import rmm
@@ -204,6 +218,7 @@ def _init_gpu_backend():
         _, total_memory = cp.cuda.runtime.memGetInfo()
         pool_size = int(total_memory * 0.6)
     pool_size -= pool_size % 256  # RMM requires the pool size to be a multiple of 256 bytes
+    _GPU_POOL_BYTES = pool_size
     rmm.reinitialize(pool_allocator=True, initial_pool_size=0, maximum_pool_size=pool_size)
     cp.cuda.set_allocator(rmm_cupy_allocator)
 
@@ -220,7 +235,7 @@ class _GpuBatchedSolver:
     b_index=..., compute_fitted=True) -> (X, fitted)``, with A shared, B gathered by
     b_index and masks column-major (n_signatures, n_problems).
 
-    Follows the GPU setup in bin/using_nnls_example.py: a bounded RMM pool and cupy
+    Follows the GPU setup from the cuML batched-NNLS PR (rapidsai/cuml#8402): a bounded RMM pool and cupy
     on raft's per-thread default stream (see _init_gpu_backend), plus A / B / ||b||
     kept device-resident for as long as the same (A, B, norm_obs) objects keep
     arriving - they are loop-invariant across the greedy steps of one attribution,
@@ -276,6 +291,34 @@ class _GpuBatchedSolver:
             self._cache["norm"] = cp.asarray(norm_obs, dtype=self._score_dtype)
         return (self._cache["A"], self._cache["B_solve"],
                 self._cache["B_score"], self._cache["norm"])
+
+    def suggest_chunk(self, n_channels, n_signatures):
+        """Auto-size the NNLS batch (problems per cuML call) to the GPU's memory.
+
+        Picks the largest chunk whose estimated device footprint fits a fraction of the
+        RMM pool, so a bigger card / smaller context (e.g. SBS-96) gets a larger batch
+        and a memory-heavy context (SBS-1536/4608) a smaller one, with no manual tuning.
+        Used only when --gpu_batch_size <= 0. See the _CHUNK_* knobs above.
+        """
+        solve_bytes = np.dtype(self._solve_dtype).itemsize
+        score_bytes = np.dtype(self._score_dtype).itemsize
+        # Buffers we allocate per problem (exact): fitted + gathered target + residual
+        # over n_channels; masks (uint8) + discarded weights over n_signatures.
+        our_bytes = (n_channels * (solve_bytes + 2 * score_bytes)
+                     + n_signatures * (1 + solve_bytes) + 16)
+        # cuML's internal per-problem workspace (estimate): active submatrix
+        # (n_channels x n_sig) plus normal-equation scratch (~n_sig^2), in the solve dtype.
+        cuml_bytes = (n_channels * n_signatures + n_signatures * n_signatures) * solve_bytes
+        per_problem = our_bytes + _CHUNK_WORKSPACE_FACTOR * cuml_bytes
+        budget = _CHUNK_MEM_FRACTION * _GPU_POOL_BYTES
+        chunk = int(budget // per_problem) if per_problem > 0 else _CHUNK_MAX
+        chunk = int(min(_CHUNK_MAX, max(_CHUNK_MIN, chunk)))
+        if not getattr(self, '_chunk_logged', False):  # log once per process
+            print(f"GPU auto batch size: {chunk} problems/call "
+                  f"(n_channels={n_channels}, n_signatures={n_signatures}, "
+                  f"pool={_GPU_POOL_BYTES / (1 << 30):.1f} GiB)")
+            self._chunk_logged = True
+        return chunk
 
     def solve_and_score(self, A, B, norm_obs, masks, b_index, chunk_size):
         import cupy as cp
@@ -835,11 +878,14 @@ def process_samples_batch(input_mutations, signatures, sel_sig_nums, args):
             # match the scalar path's per-sample norm computation exactly
             norm_obs = np.array([np.linalg.norm(B[:, j]) for j in range(B.shape[1])])
 
+            gpu_chunk = getattr(args, 'gpu_batch_size', 0)
+            if gpu_chunk <= 0:  # auto-size the batch to the GPU's memory
+                gpu_chunk = _GPU_SOLVER.suggest_chunk(sig_values.shape[0], sig_values.shape[1])
             per_sample_cols = optimise_signatures_batched(
                 B, norm_obs, sig_values, initial_cols,
                 strategy=args.optimisation_strategy,
                 weak_threshold=args.weak_threshold,
-                chunk_size=getattr(args, 'gpu_batch_size', 4096))
+                chunk_size=gpu_chunk)
 
             for j, s_i in enumerate(valid_s_i):
                 final_names = [all_names[c] for c in per_sample_cols[j]]
@@ -934,8 +980,10 @@ if __name__ == '__main__':
                             "which issues one large masked NNLS batch per greedy step across all "
                             "still-active samples. Intended for GPU offloading via "
                             "batched_solve_and_score().")
-    parser.add_argument("--gpu_batch_size", dest="gpu_batch_size", default=4096, type=int,
-                       help="Maximum number of NNLS problems solved per batched call (memory bound).")
+    parser.add_argument("--gpu_batch_size", dest="gpu_batch_size", default=0, type=int,
+                       help="NNLS problems solved per batched GPU call. 0 (default) auto-sizes it "
+                            "to the GPU's memory (larger batch for smaller contexts / bigger cards); "
+                            "a positive value sets it manually. Ignored unless --use_gpu is set.")
     parser.add_argument("--gpu_precision", dest="gpu_precision", default='mixed',
                        choices=['mixed', 'fp32', 'fp64'],
                        help="Floating-point precision for the cuML GPU backend: 'mixed' "
