@@ -155,7 +155,7 @@ affect the default CPU behaviour.
 Then run with a conda-enabled profile:
 
 ```bash
-nextflow run run_auto_optimised_analysis.nf -profile conda -c gpu.config
+nextflow run run_auto_optimised_analysis.nf -profile conda,test_GPU -c gpu.config
 ```
 
 ## Running manually

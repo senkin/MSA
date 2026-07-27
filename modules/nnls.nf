@@ -4,6 +4,8 @@
 // across samples (one large masked NNLS batch per greedy step), offloaded to the
 // cuML batched NNLS solver via batched_solve_and_score().
 def gpu_flag = params.use_GPU ? "--use_gpu --gpu_precision ${params.gpu_precision} --gpu_batch_size ${params.gpu_batch_size}" : ''
+// Optional fixed RNG seed for bootstrap resampling (reproducible across CPU/GPU runs).
+def seed_flag = params.seed != null ? "--seed ${params.seed}" : ''
 
 // Unoptimized NNLS workflow
 workflow NNLS_unoptimized_workflow {
@@ -215,7 +217,7 @@ workflow NNLS_bootstrap_workflow {
             --optimisation_strategy ${params.optimisation_strategy} \\
             --bootstrap_method ${params.bootstrap_method} \\
             -W ${weak_threshold} -S ${strong_threshold} --add_suffix \\
-            -p ${signature_prefix} -i ${params.output_path}/temp/output_tables -s ${params.output_path}/temp/signature_tables -o "./" ${gpu_flag}
+            -p ${signature_prefix} -i ${params.output_path}/temp/output_tables -s ${params.output_path}/temp/signature_tables -o "./" ${gpu_flag} ${seed_flag}
         """
     }
 
@@ -354,7 +356,7 @@ workflow FINAL_NNLS_BOOTSTRAP_workflow {
             -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \\
             --optimisation_strategy ${params.optimisation_strategy} --bootstrap_method ${params.bootstrap_method} \\
             -W `< ${weak_penalty}` -S `< ${strong_penalty}` -n ${params.number_of_samples} \\
-            -p ${signature_prefix} -i ${params.output_path}/temp/input_tables -s ${params.output_path}/temp/signature_tables -o "./" ${gpu_flag}
+            -p ${signature_prefix} -i ${params.output_path}/temp/input_tables -s ${params.output_path}/temp/signature_tables -o "./" ${gpu_flag} ${seed_flag}
         """
     }
 

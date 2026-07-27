@@ -972,6 +972,11 @@ if __name__ == '__main__':
                        help="Index of the first bootstrap iteration written by this process "
                             "(iterations are numbered start .. start + n_bootstrap - 1). Lets a "
                             "fanned-out / chunked launch write a distinct slice of the indices.")
+    parser.add_argument("--seed", dest="seed", default=None, type=int,
+                       help="Base RNG seed for bootstrap resampling. When set, iteration i is "
+                            "seeded from (seed, i), so the resample for a given iteration is "
+                            "identical regardless of how iterations are split across processes "
+                            "(CPU fan-out vs GPU single-process). Default: non-deterministic.")
     parser.add_argument("--bootstrap_output_suffix", dest="bootstrap_output_suffix", default='',
                        help="String inserted into per-iteration bootstrap output filenames "
                             "(e.g. '<weak>_<strong>' thresholds), to match downstream expectations.")
@@ -1104,6 +1109,14 @@ if __name__ == '__main__':
               f"(indices {start_index}..{end_index}, method: {method})")
         start_time = time.process_time()
         for i in range(start_index, end_index + 1):
+            if args.seed is not None:
+                # Seed per iteration index (not once per process) so iteration i draws the
+                # same resample whether iterations are fanned out one-per-job (CPU) or run
+                # together in one process (GPU). SeedSequence mixes (seed, i) to avoid the
+                # correlation of consecutive integer seeds; it seeds the legacy global RNG
+                # that bootstrap_mutation_table() uses.
+                iter_seed = np.random.SeedSequence([args.seed, i]).generate_state(1)[0]
+                np.random.seed(int(iter_seed))
             if method == "bootstrap_residuals":
                 resampled = bootstrap_mutation_table(input_mutations, method=method,
                                                      fitted=fitted_table, residuals=residuals_table)
@@ -1124,6 +1137,11 @@ if __name__ == '__main__':
     else:
         # ===== Single attribution (central run, or a single externally-indexed bootstrap) =====
         # Bootstrap if requested
+        if args.bootstrap and args.seed is not None:
+            # Match the per-iteration seeding of the in-process loop: this single bootstrap
+            # is iteration `bootstrap_start_index`.
+            iter_seed = np.random.SeedSequence([args.seed, args.bootstrap_start_index]).generate_state(1)[0]
+            np.random.seed(int(iter_seed))
         if args.bootstrap and args.bootstrap_method != "bootstrap_residuals":
             input_mutations = bootstrap_mutation_table(input_mutations, method=args.bootstrap_method)
 
