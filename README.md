@@ -21,6 +21,12 @@ nextflow run https://gitlab.com/s.senkin/MSA -profile conda,test
 export NXF_VER=25.04.8
 ```
 
+**Nextflow 25+/26+**: newer Nextflow ships a stricter config/DSL parser that rejects some constructs this pipeline still uses (e.g. `for` loops and the `mix(*list)` spread). Until the pipeline is migrated to the strict syntax, select the legacy parser via an environment variable before running (e.g. in your job script or shell profile):
+
+```bash
+export NXF_SYNTAX_PARSER=v1
+```
+
 It is recommended to use [docker](https://www.docker.com/) or [singularity](https://sylabs.io/singularity/) profiles as these normally provide greater stability and reproducibility than [conda](https://conda.io).
 
 The pipeline should run and produce all the results automatically. You can also retrieve the code ([see below](#getting-started)) in order to adjust all the inputs and parameters. In the [nextflow.config](nextflow.config) file various parameters can be specified.
@@ -112,6 +118,44 @@ output_path/
 └── temp/                       # Temporary conversions
     ├── input_tables/
     └── signature_tables/
+```
+
+## GPU acceleration (experimental)
+
+The greedy NNLS signature-optimisation hot path can be offloaded to the GPU via
+[cuML](https://github.com/rapidsai/cuml)'s batched NNLS solver. This is opt-in and does not
+affect the default CPU behaviour.
+
+1. **Build the GPU environment** (once per cluster + GPU architecture, as a build job on a
+   node with an NVIDIA driver — not the login node). This builds the source-only cuML into a
+   conda env and tops it up with MSA's dependencies:
+
+   ```bash
+   ./setup_gpu_env.sh                              # CUDA 13.3 (default)
+   ./setup_gpu_env.sh -c all_cuda-129_arch-x86_64 -e all_cuda-129_arch-x86_64   # if the GPU driver only supports CUDA 12.x
+   ```
+
+   Match the CUDA version to the driver on your GPU nodes (`nvidia-smi` shows the maximum
+   supported CUDA). The script prints the full env path to use in the next step.
+
+2. **Enable it** in [nextflow.config](nextflow.config) (or on the command line). `gpu_conda_env`
+   must be the **full path** to the built env — a bare name is treated by Nextflow's `conda`
+   directive as a package to install:
+
+   ```groovy
+   use_GPU       = true
+   gpu_conda_env = '/home/you/miniforge3/envs/all_cuda-133_arch-x86_64'
+   ```
+
+3. **Route the NNLS jobs to a GPU queue.** Cluster-specific queue/GPU-request settings are
+   deliberately not committed; put them in your own config (e.g. `gpu.config`) and pass it with
+   `-c gpu.config` only for GPU runs. See [gpu.config.example](gpu.config.example) for a template
+   scoped to the `gpu_nnls`-labelled processes.
+
+Then run with a conda-enabled profile:
+
+```bash
+nextflow run run_auto_optimised_analysis.nf -profile conda,test_GPU -c gpu.config
 ```
 
 ## Running manually

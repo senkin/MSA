@@ -1,5 +1,12 @@
 // modules/nnls.nf
 
+// In GPU mode, run_NNLS.py runs the greedy signature optimisation transposed
+// across samples (one large masked NNLS batch per greedy step), offloaded to the
+// cuML batched NNLS solver via batched_solve_and_score().
+def gpu_flag = params.use_GPU ? "--use_gpu --gpu_precision ${params.gpu_precision} --gpu_batch_size ${params.gpu_batch_size}" : ''
+// Optional fixed RNG seed for bootstrap resampling (reproducible across CPU/GPU runs).
+def seed_flag = params.seed != null ? "--seed ${params.seed}" : ''
+
 // Unoptimized NNLS workflow
 workflow NNLS_unoptimized_workflow {
     take:
@@ -70,6 +77,7 @@ workflow NNLS_optimized_workflow {
     // Optimized NNLS process
     process run_optimized_NNLS {
         tag "${mutation_type}/${dataset}/${weak_threshold}/${strong_threshold}"
+        label 'gpu_nnls'
         publishDir "${params.output_path}/outputs_optimisation", mode: 'copy', overwrite: true
         
         input:
@@ -117,7 +125,7 @@ workflow NNLS_optimized_workflow {
             -p ${signature_prefix} --optimisation_strategy ${params.optimisation_strategy} \\
             -W ${weak_threshold} -S ${strong_threshold} \\
             -i ${params.output_path}/temp/output_tables -s ${params.output_path}/temp/signature_tables \\
-            -o "./" -x --add_suffix
+            -o "./" -x --add_suffix ${gpu_flag}
         """
     }
     
@@ -152,11 +160,16 @@ workflow NNLS_bootstrap_workflow {
     num_bootstrap_samples
     
     main:
-    // Bootstrap NNLS process - runs once per bootstrap sample
+    // Bootstrap NNLS process. Each task runs `n_per_task` bootstrap iterations
+    // in-process via run_NNLS.py --n_bootstrap, writing one indexed output set per
+    // iteration (indices start_index .. start_index + n_per_task - 1) directly into
+    // the bootstrap_output/ folder. The number of tasks vs iterations-per-task is
+    // chosen by the caller depending on params.use_GPU (see below).
     process run_bootstrap_NNLS {
-        tag "${mutation_type}/${dataset}/${bootstrap_index}"
+        tag "${mutation_type}/${dataset}/${weak_threshold}/${strong_threshold}/${start_index}"
+        label 'gpu_nnls'
         publishDir "${params.output_path}/outputs_optimisation"
-        
+
         input:
         val dataset
         val mutation_type
@@ -164,24 +177,24 @@ workflow NNLS_bootstrap_workflow {
         path signature_files
         val weak_threshold
         val strong_threshold
-        val bootstrap_index
-        
+        val n_per_task
+        val start_index
+
         output:
-        path "./SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output/output_SIM_${dataset}_${mutation_type}_${weak_threshold}_${strong_threshold}_${bootstrap_index}_mutations_table.csv", emit: mutations_table
-        path "./SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output/output_SIM_${dataset}_${mutation_type}_${weak_threshold}_${strong_threshold}_${bootstrap_index}_weights_table.csv", emit: weights_table
-        path "./SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output/output_SIM_${dataset}_${mutation_type}_${weak_threshold}_${strong_threshold}_${bootstrap_index}_stat_info.csv", emit: stat_info
-        val bootstrap_index, emit: bootstrap_indices
-        
+        path "SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output/output_SIM_${dataset}_${mutation_type}_${weak_threshold}_${strong_threshold}_*_mutations_table.csv", emit: mutations_tables
+        path "SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output/output_SIM_${dataset}_${mutation_type}_${weak_threshold}_${strong_threshold}_*_weights_table.csv", emit: weights_tables
+        path "SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output/output_SIM_${dataset}_${mutation_type}_${weak_threshold}_${strong_threshold}_*_stat_info.csv", emit: stat_infos
+
         when:
         !params.run_only_simulations
-        
+
         script:
         def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
         """
         # Create output directory
         mkdir -p ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}
-        
-        # Copy the appropriate simulated dataset based on mutation type
+
+        # Copy the appropriate simulated dataset (truth weights) based on mutation type
         if [[ ${mutation_type} == "SBS" ]]; then
             cp ${params.output_path}/temp/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.${params.SBS_context}.weights.csv \\
                ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
@@ -195,33 +208,24 @@ workflow NNLS_bootstrap_workflow {
             cp ${params.output_path}/temp/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.${mutation_type}.weights.csv \\
                ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
         fi
-        
-        # Run bootstrap NNLS analysis
-        python ${workflow.projectDir}/bin/run_NNLS.py -B -d SIM_${dataset} -t ${mutation_type} -c ${params.SBS_context} -x \\
+
+        # Run this task's slice of bootstrap iterations in-process. run_NNLS.py writes
+        # one indexed output set per iteration directly into the bootstrap_output/ folder.
+        python ${workflow.projectDir}/bin/run_NNLS.py -B --n_bootstrap ${n_per_task} --bootstrap_start_index ${start_index} \\
+            --bootstrap_output_suffix ${weak_threshold}_${strong_threshold} \\
+            -d SIM_${dataset} -t ${mutation_type} -c ${params.SBS_context} -x \\
             --optimisation_strategy ${params.optimisation_strategy} \\
             --bootstrap_method ${params.bootstrap_method} \\
             -W ${weak_threshold} -S ${strong_threshold} --add_suffix \\
-            -p ${signature_prefix} -i ${params.output_path}/temp/output_tables -s ${params.output_path}/temp/signature_tables -o "./"
-        
-        # Create bootstrap output directory and move files
-        mkdir -p SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output
-        
-        # Move the output files with bootstrap index
-        mv SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/output_SIM_${dataset}_${mutation_type}_mutations_table.csv \\
-           SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output/output_SIM_${dataset}_${mutation_type}_${weak_threshold}_${strong_threshold}_${bootstrap_index}_mutations_table.csv
-        
-        mv SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/output_SIM_${dataset}_${mutation_type}_weights_table.csv \\
-           SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output/output_SIM_${dataset}_${mutation_type}_${weak_threshold}_${strong_threshold}_${bootstrap_index}_weights_table.csv
-        
-        mv SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/output_SIM_${dataset}_${mutation_type}_stat_info.csv \\
-           SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output/output_SIM_${dataset}_${mutation_type}_${weak_threshold}_${strong_threshold}_${bootstrap_index}_stat_info.csv
+            -p ${signature_prefix} -i ${params.output_path}/temp/output_tables -s ${params.output_path}/temp/signature_tables -o "./" ${gpu_flag} ${seed_flag}
         """
     }
-    
-    // Create a channel with bootstrap indices (1 to num_bootstrap_samples)
-    bootstrap_indices_ch = Channel.from(1..num_bootstrap_samples)
-    
-    // Run bootstrap process for each index
+
+    // GPU: one task runs all iterations (a single reused context).
+    // CPU (default): one task per iteration for maximum parallel width on the scheduler.
+    def n_per_task = params.use_GPU ? num_bootstrap_samples : 1
+    def start_indices = params.use_GPU ? Channel.value(1) : Channel.of(1..num_bootstrap_samples)
+
     run_bootstrap_NNLS(
         dataset,
         mutation_type,
@@ -229,14 +233,15 @@ workflow NNLS_bootstrap_workflow {
         signature_files,
         weak_threshold,
         strong_threshold,
-        bootstrap_indices_ch
+        n_per_task,
+        start_indices
     )
-    
+
     emit:
-    mutations_tables = run_bootstrap_NNLS.out.mutations_table
-    weights_tables = run_bootstrap_NNLS.out.weights_table
-    stat_infos = run_bootstrap_NNLS.out.stat_info
-    bootstrap_indices = run_bootstrap_NNLS.out.bootstrap_indices
+    mutations_tables = run_bootstrap_NNLS.out.mutations_tables
+    weights_tables = run_bootstrap_NNLS.out.weights_tables
+    stat_infos = run_bootstrap_NNLS.out.stat_infos
+    bootstrap_done = run_bootstrap_NNLS.out.stat_infos
 }
 
 // Final NNLS workflow using optimal penalties (reuses existing process logic)
@@ -252,6 +257,7 @@ workflow FINAL_NNLS_workflow {
     // Simple final NNLS process using penalty files directly
     process run_final_NNLS {
         tag "${mutation_type}/${dataset}"
+        label 'gpu_nnls'
         publishDir "${params.output_path}/output_tables", mode: 'copy', overwrite: true
         
         input:
@@ -279,8 +285,8 @@ workflow FINAL_NNLS_workflow {
         python ${workflow.projectDir}/bin/run_NNLS.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \\
             --optimisation_strategy ${params.optimisation_strategy} \\
             -W `< ${weak_penalty}` -S `< ${strong_penalty}` -n ${params.number_of_samples} \\
-            -p ${signature_prefix} -i ${params.output_path}/temp/input_tables -s ${params.output_path}/temp/signature_tables -o "./"
-        
+            -p ${signature_prefix} -i ${params.output_path}/temp/input_tables -s ${params.output_path}/temp/signature_tables -o "./" ${gpu_flag}
+
         # Copy residuals and fitted values back to input tables
         cp ${dataset}/output_${dataset}_${mutation_type}_residuals.csv ${params.output_path}/temp/input_tables/${dataset}/
         cp ${dataset}/output_${dataset}_${mutation_type}_fitted_values.csv ${params.output_path}/temp/input_tables/${dataset}/
@@ -315,56 +321,63 @@ workflow FINAL_NNLS_BOOTSTRAP_workflow {
     num_bootstrap_samples
     
     main:
-    // Simple bootstrap process using penalty files directly
+    // Bootstrap process using penalty files directly. Each task runs `n_per_task`
+    // bootstrap iterations in-process, writing indices start_index .. start_index +
+    // n_per_task - 1. Tasks-vs-iterations split is chosen by params.use_GPU below.
     process run_final_bootstrap_NNLS {
-        tag "${mutation_type}/${dataset}/${bootstrap_index}"
+        tag "${mutation_type}/${dataset}/${start_index}"
+        label 'gpu_nnls'
         publishDir "${params.output_path}/output_tables", mode: 'copy', overwrite: true
-        
+
         input:
         tuple val(dataset), val(mutation_type)
         path weak_penalty
         path strong_penalty
         path input_files
         path signature_files
-        each bootstrap_index
-        
+        val n_per_task
+        each start_index
+
         output:
-        path "./${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_${bootstrap_index}_mutations_table.csv", emit: mutations_table
-        path "./${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_${bootstrap_index}_stat_info.csv", emit: stat_info
-        path "./${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_${bootstrap_index}_weights_table.csv", emit: weights_table
-        val bootstrap_index, emit: bootstrap_indices
-        
+        path "${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_*_mutations_table.csv", emit: mutations_tables
+        path "${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_*_stat_info.csv", emit: stat_infos
+        path "${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_*_weights_table.csv", emit: weights_tables
+
         when:
         !params.run_only_optimisation
-        
+
         script:
         def optimised_flag = params.optimised ? "-x" : ""
         def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
         """
-        python ${workflow.projectDir}/bin/run_NNLS.py -B -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \\
+        # Run this task's slice of bootstrap iterations in-process; run_NNLS.py writes
+        # one indexed output set per iteration into ${dataset}/bootstrap_output/.
+        python ${workflow.projectDir}/bin/run_NNLS.py -B --n_bootstrap ${n_per_task} --bootstrap_start_index ${start_index} \\
+            -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \\
             --optimisation_strategy ${params.optimisation_strategy} --bootstrap_method ${params.bootstrap_method} \\
             -W `< ${weak_penalty}` -S `< ${strong_penalty}` -n ${params.number_of_samples} \\
-            -p ${signature_prefix} -i ${params.output_path}/temp/input_tables -s ${params.output_path}/temp/signature_tables -o "./"
-        
-        mkdir -p ${dataset}/bootstrap_output
-        mv ${dataset}/output_${dataset}_${mutation_type}_mutations_table.csv ${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_${bootstrap_index}_mutations_table.csv
-        mv ${dataset}/output_${dataset}_${mutation_type}_weights_table.csv ${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_${bootstrap_index}_weights_table.csv
-        mv ${dataset}/output_${dataset}_${mutation_type}_stat_info.csv ${dataset}/bootstrap_output/output_${dataset}_${mutation_type}_${bootstrap_index}_stat_info.csv
+            -p ${signature_prefix} -i ${params.output_path}/temp/input_tables -s ${params.output_path}/temp/signature_tables -o "./" ${gpu_flag} ${seed_flag}
         """
     }
-    
+
+    // GPU: one task runs all iterations (a single reused context).
+    // CPU (default): one task per iteration (each) for maximum parallel width.
+    def n_per_task = params.use_GPU ? num_bootstrap_samples : 1
+    def start_indices = params.use_GPU ? [1] : (1..num_bootstrap_samples).toList()
+
     run_final_bootstrap_NNLS(
         penalties_for_attribution,
         optimal_weak_penalty_files,
         optimal_strong_penalty_files,
         input_files,
         signature_files,
-        Channel.from(1..num_bootstrap_samples)
+        n_per_task,
+        start_indices
     )
-    
+
     emit:
-    mutations_tables = run_final_bootstrap_NNLS.out.mutations_table
-    stat_infos = run_final_bootstrap_NNLS.out.stat_info
-    weights_tables = run_final_bootstrap_NNLS.out.weights_table
-    bootstrap_indices = run_final_bootstrap_NNLS.out.bootstrap_indices
+    mutations_tables = run_final_bootstrap_NNLS.out.mutations_tables
+    stat_infos = run_final_bootstrap_NNLS.out.stat_infos
+    weights_tables = run_final_bootstrap_NNLS.out.weights_tables
+    bootstrap_done = run_final_bootstrap_NNLS.out.stat_infos
 }

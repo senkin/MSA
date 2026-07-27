@@ -1,7 +1,5 @@
 // modules/bootstrap_tables.nf
 
-def suffix = (params.use_absolute_attributions) ? "abs_mutations" : 'weights'
-
 workflow BOOTSTRAP_TABLES_workflow {
     take:
     dataset_mutation_pairs  // tuple of (dataset, mutation_type)
@@ -80,17 +78,16 @@ workflow FINAL_BOOTSTRAP_TABLES_workflow {
         val num_bootstrap_samples
         
         output:
-        path "./${dataset}/CIs_${dataset}_${mutation_type}_bootstrap_output_${suffix}.csv", emit: confidence_intervals
-        path "./${dataset}/signatures_prevalences_${dataset}_${mutation_type}.csv", emit: signature_prevalences
-        path "./${dataset}/attributions_per_sample_${dataset}_${mutation_type}_bootstrap_output_${suffix}.json", emit: attributions_per_sample
-        path "./${dataset}/attributions_per_signature_${dataset}_${mutation_type}_bootstrap_output_${suffix}.json", emit: attributions_per_signature
-        path "./${dataset}/stat_metrics_${dataset}_${mutation_type}_bootstrap_output_${suffix}.json", emit: stat_metrics
-        path "./${dataset}/pruned_attribution_${dataset}_${mutation_type}_abs_mutations.csv", emit: pruned_attribution
+        path "${dataset}/CIs_${dataset}_${mutation_type}_bootstrap_output_*.csv", emit: confidence_intervals
+        path "${dataset}/signatures_prevalences_${dataset}_${mutation_type}.csv", emit: signature_prevalences
+        path "${dataset}/attributions_per_sample_${dataset}_${mutation_type}_bootstrap_output_*.json", emit: attributions_per_sample
+        path "${dataset}/attributions_per_signature_${dataset}_${mutation_type}_bootstrap_output_*.json", emit: attributions_per_signature
+        path "${dataset}/stat_metrics_${dataset}_${mutation_type}_bootstrap_output_*.json", emit: stat_metrics
+        path "${dataset}/pruned_attribution_${dataset}_${mutation_type}_abs_mutations.csv", emit: pruned_attribution
         path "*/truth_studies/*.csv", optional: true, emit: truth_studies_csv
         path "*/truth_studies/*.json", optional: true, emit: truth_studies_json
         
         script:
-        def abs_flag = (params.use_absolute_attributions) ? "-a" : ''
         def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
         """
         mkdir -p ${params.output_path}/output_tables/${dataset}
@@ -108,7 +105,7 @@ workflow FINAL_BOOTSTRAP_TABLES_workflow {
             fi
         fi
         
-        python ${workflow.projectDir}/bin/make_bootstrap_tables.py -d ${dataset} -t ${mutation_type} -p ${signature_prefix} ${abs_flag} \\
+        python ${workflow.projectDir}/bin/make_bootstrap_tables.py -d ${dataset} -t ${mutation_type} -p ${signature_prefix} \\
             -c ${params.SBS_context} -S ${params.output_path}/temp/signature_tables -l ${params.confidence_level} \\
             -T ${params.signature_attribution_thresholds.join(' ')} \\
             -i ${params.output_path}/output_tables -o "./" -n ${num_bootstrap_samples}

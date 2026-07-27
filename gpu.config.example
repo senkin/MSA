@@ -1,0 +1,22 @@
+// Example cluster-specific config for GPU runs. Copy to gpu.config, adjust for your
+// site, and pass it ONLY for GPU runs:  nextflow run ... -c gpu.config
+//
+// Nothing here is committed with real values because queues, GPU flags and pool sizes
+// are site-specific. It is scoped to the 'gpu_nnls'-labelled NNLS processes (see
+// modules/nnls.nf), so it does not touch the rest of the pipeline. Because it is loaded
+// only for GPU runs it needs no conditional, and a `-c` file overrides any generic
+// `process.queue` from your global ~/.nextflow/config (and a `withLabel` selector
+// outranks a generic setting), so these win over a cluster-wide default queue.
+
+process {
+    withLabel: gpu_nnls {
+        queue = 'gpu'                       // your GPU partition/queue
+        clusterOptions = '--gres=gpu:1'     // SLURM: actually request a GPU
+        // accelerator = 1                   // executor-agnostic alternative (k8s/cloud)
+
+        // Optional: cap the RMM pool (MiB), divided across processes sharing one GPU.
+        // Leave unset to default to 60% of total device memory (fine for one GPU job
+        // per device).
+        // env = [ 'RMM_POOL_SIZE_MIB': '40000' ]
+    }
+}
