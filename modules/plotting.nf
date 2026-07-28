@@ -1,6 +1,5 @@
 // modules/plotting.nf
 
-def abs_flag = (params.use_absolute_attributions) ? "-a" : ''
 def strands_flag = (params.show_strands) ? "-b" : ''
 def nontranscribed_flag = (params.show_nontranscribed_region) ? "-n" : ''
 def error_flag = (params.show_poisson_errors) ? "-e" : ''
@@ -17,13 +16,14 @@ workflow plot_spectra_workflow {
     main:
     process plot_spectra {
         tag "${mutation_type}/${dataset}/${plot_type}"
-        publishDir "${params.output_path}/plots", mode: 'move', overwrite: true
+        publishDir "${params.output_path}/plots", mode: 'copy', overwrite: true
 
         input:
         val dataset
         val mutation_type
         path inputs
         val plot_type
+        path conversion_done // barrier: forces staging/conversion to finish before plotting
 
         output:
         path '*/*/*.pdf', optional: true
@@ -51,8 +51,9 @@ workflow plot_spectra_workflow {
             """
         }
     }
-    // Invoke the process
-    plot_spectra(dataset, mutation_type, inputs, plot_type)
+    // Invoke the process (conversion_done is passed as an ordering barrier so the
+    // plot never starts before staging/conversion of its inputs has finished)
+    plot_spectra(dataset, mutation_type, inputs, plot_type, conversion_done)
 }
 
 // Bootstrap attributions plotting workflow
@@ -64,7 +65,7 @@ workflow BOOTSTRAP_ATTRIBUTIONS_PLOTS_workflow {
     main:
     process plot_bootstrap_attributions {
         tag "${mutation_type}/${dataset}"
-        publishDir "${params.output_path}/plots", mode: 'move', overwrite: true
+        publishDir "${params.output_path}/plots", mode: 'copy', overwrite: true
         
         input:
         tuple val(dataset), val(mutation_type)
@@ -79,10 +80,14 @@ workflow BOOTSTRAP_ATTRIBUTIONS_PLOTS_workflow {
         params.plot_bootstrap_attributions
         
         script:
+        def common_args = "-d ${dataset} -t ${mutation_type} -p ${signature_prefix} " +
+                          "-c ${params.SBS_context} -S ${params.output_path}/temp/signature_tables " +
+                          "-I ${params.output_path}/temp/input_tables " +
+                          "-i ${params.output_path}/output_tables -o ./ -n ${params.number_of_bootstrapped_samples}"
         """
-        python ${workflow.projectDir}/bin/plot_bootstrap_attributions.py -d ${dataset} -t ${mutation_type} -p ${signature_prefix} ${abs_flag} \\
-            -c ${params.SBS_context} -S ${params.output_path}/temp/signature_tables -I ${params.output_path}/temp/input_tables \\
-            -i ${params.output_path}/output_tables -o "./" -n ${params.number_of_bootstrapped_samples}
+        # Produce both relative (weights) and absolute (mutation count) attribution plots
+        python ${workflow.projectDir}/bin/plot_bootstrap_attributions.py ${common_args}
+        python ${workflow.projectDir}/bin/plot_bootstrap_attributions.py ${common_args} -a
         """
     }
     
@@ -111,7 +116,7 @@ workflow METRICS_PLOTS_workflow {
     main:
     process plot_metrics {
         tag "${mutation_type}/${dataset}"
-        publishDir "${params.output_path}/plots", mode: 'move', overwrite: true
+        publishDir "${params.output_path}/plots", mode: 'copy', overwrite: true
         
         input:
         tuple val(dataset), val(mutation_type)
@@ -156,7 +161,7 @@ workflow FITTED_SPECTRA_PLOTS_workflow {
     main:
     process plot_fitted_spectra {
         tag "${mutation_type}/${dataset}"
-        publishDir "${params.output_path}/plots", mode: 'move', overwrite: true
+        publishDir "${params.output_path}/plots", mode: 'copy', overwrite: true
         
         input:
         tuple val(dataset), val(mutation_type)
@@ -200,7 +205,7 @@ workflow RESIDUALS_PLOTS_workflow {
     main:
     process plot_residuals {
         tag "${mutation_type}/${dataset}"
-        publishDir "${params.output_path}/plots", mode: 'move', overwrite: true
+        publishDir "${params.output_path}/plots", mode: 'copy', overwrite: true
         
         input:
         tuple val(dataset), val(mutation_type)

@@ -208,7 +208,7 @@ workflow {
         
         if (params.plot_input_spectra) {
             for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, params.input_tables, 'mutation_spectra', input_files_channel.collect())
+                plot_spectra_workflow(params.dataset, mutation_type, params.input_tables, 'mutation_spectra', input_files_channel)
             }
         }
     }
@@ -256,7 +256,7 @@ workflow {
                     strong_threshold,
                     params.number_of_bootstrapped_samples_in_optimisation
                 )
-                bootstrap_outputs.add(OptimizedNNLSforBootstrap.out.bootstrap_indices)
+                bootstrap_outputs.add(OptimizedNNLSforBootstrap.out.bootstrap_done)
             }
         }
 
@@ -311,7 +311,7 @@ workflow {
         // Generate final bootstrap tables after final bootstrap NNLS completes
         FINAL_BOOTSTRAP_TABLES_workflow(
             FINAL_NNLS_workflow.out.dataset_mutation_pairs,
-            FINAL_NNLS_BOOTSTRAP_workflow.out.bootstrap_indices,
+            FINAL_NNLS_BOOTSTRAP_workflow.out.bootstrap_done,
             params.number_of_bootstrapped_samples
         )
 

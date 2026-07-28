@@ -1,0 +1,37 @@
+# Conda env for the GPU (cuML) NNLS processes  ->  params.gpu_conda_env
+#
+# The batched-NNLS cuML is BUILT FROM SOURCE (rapidsai/cuml PR #8402); it is not in
+# any released channel, so this is NOT a create-from-scratch environment. Create the
+# env from the expert's build file and build cuML into it:
+#
+#   git clone -b fea-nnls https://github.com/achirkin/cuml.git && cd cuml
+#   conda env create -f conda/environments/all_cuda-133_arch-x86_64.yaml
+#   conda activate all_cuda-133_arch-x86_64
+#   ./build.sh libcuml cuml
+#
+# That build env ALREADY provides every dependency run_NNLS.py needs, at versions
+# compatible with environment.yml: numpy (>=2.0,<3.0), numba (>=0.60,<0.65), scipy
+# (>=1.14), matplotlib-base, statsmodels, plus pandas via cudf, and cupy/rmm.
+# So normally you just point gpu_conda_env at the built env by its FULL PATH
+# (a bare name is treated by Nextflow's conda directive as a package to install):
+#
+#   gpu_conda_env = '/home/you/miniforge3/envs/all_cuda-133_arch-x86_64'
+#
+# This file is an OPTIONAL, DEFENSIVE overlay: it re-asserts only the two MSA-
+# specific (non-RAPIDS-core) packages that common_methods.py imports at load time,
+# so run_NNLS.py keeps importing even if a future edit to the RAPIDS yaml drops one.
+# Apply it AFTER building; today it is a no-op because both are already present:
+#
+#   conda env update -n all_cuda-133_arch-x86_64 -f environment_gpu.yml
+#
+# Versions are intentionally unpinned so conda keeps RAPIDS' own (stricter) pins on
+# the numpy/numba/scipy/cupy/cudf stack and does not move the CUDA packages. Do NOT
+# add numpy/pandas/scipy/numba here - let RAPIDS own those.
+name: all_cuda-133_arch-x86_64
+channels:
+  - rapidsai
+  - conda-forge
+  - nodefaults
+dependencies:
+  - matplotlib-base
+  - statsmodels
