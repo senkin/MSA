@@ -706,6 +706,61 @@ def remove_weak_signatures(observed, norm_obs, sig_values, active_cols, col_name
     return active_cols, final_similarity
 
 
+def remove_weak_signatures_trajectory(observed, norm_obs, sig_values, active_cols, idx=8):
+    """Greedy leave-one-out removal recorded to full depth, penalty-free.
+
+    Runs exactly the same removal loop as remove_weak_signatures() but with no
+    stopping threshold: it removes the weakest signature at every step, down to a
+    single one, recording the contribution (similarity drop) at which each is
+    removed. Because the removal *choice* at each step (argmin contribution) does not
+    depend on the penalty - only the stop/continue decision does - a removal run at
+    any weak_threshold is a prefix of this one trajectory. select_from_trajectory()
+    can therefore reconstruct the surviving set at ANY penalty from this single pass,
+    exactly reproducing remove_weak_signatures() without re-solving per penalty.
+
+    Returns
+    -------
+    active_cols : list[int]
+        the starting set, in original order.
+    trajectory : list[(int, float)]
+        (dropped_col, contribution) in removal order, length len(active_cols) - 1.
+    """
+    active_cols = list(active_cols)
+    remaining = list(active_cols)
+    trajectory = []
+    base_similarity = _attribution_similarity(sig_values[:, remaining], observed, idx, norm_obs)
+
+    while len(remaining) > 1:
+        column_sets = [remaining[:p] + remaining[p + 1:] for p in range(len(remaining))]
+        contributions = np.empty(len(remaining))
+        for p, cols in enumerate(column_sets):
+            fitted = sig_values[:, cols] @ nnls(sig_values[:, cols], observed)[0]
+            contributions[p] = base_similarity - _similarity_from_fitted(observed, fitted, idx, norm_obs)
+        p_weakest = int(np.argmin(contributions))
+        trajectory.append((remaining.pop(p_weakest), float(contributions[p_weakest])))
+        base_similarity = _attribution_similarity(sig_values[:, remaining], observed, idx, norm_obs)
+
+    return active_cols, trajectory
+
+
+def select_from_trajectory(active_cols, trajectory, weak_threshold):
+    """Reconstruct the surviving signature set at ``weak_threshold`` from a trajectory.
+
+    Replays the recorded removals: drop each signature while its recorded
+    contribution is < weak_threshold, and stop at the first contribution that is not
+    (mirroring remove_weak_signatures()'s break). Returns the survivors in the
+    original ``active_cols`` order. This is a cheap O(k) re-threshold, so the optimal
+    penalty can be scanned at arbitrary resolution from one trajectory per sample.
+    """
+    removed = set()
+    for dropped, contribution in trajectory:
+        if contribution < weak_threshold:
+            removed.add(dropped)
+        else:
+            break
+    return [c for c in active_cols if c not in removed]
+
+
 def add_strong_signatures(observed, norm_obs, sig_values, active_cols, candidate_cols, col_names,
                           strong_threshold=0.05, idx=8, verbose=False):
     """Greedy addition of strong signatures drawn from ``candidate_cols``.
