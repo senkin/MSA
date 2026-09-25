@@ -143,6 +143,14 @@ class BatchedTrajectoryTest(unittest.TestCase):
 
 class AutoThresholdsTest(unittest.TestCase):
 
+    def test_threshold_labels(self):
+        # labels name the output folders: existing ones must not change, new ones must be exact
+        for value, label in [(0, '0'), (0.0, '0'), (0.0001, '0.0001'), (0.0003, '0.0003'),
+                             (0.01, '0.01'), (0.02, '0.02'), (1, '1'), (1.2e-07, '1.2e-07')]:
+            self.assertEqual(R.format_threshold(value), label)
+        for value in (3.7e-05, 0.00012345, 5e-07, 0.18):
+            self.assertEqual(float(R.format_threshold(value)), value)
+
     def test_breakpoint_based_selection(self):
         # contributions are not monotonic: the breakpoints are their running maxima
         trajectories = [[(0, 1e-17), (1, 2e-5), (2, 1e-5), (3, 3e-3)], [(4, -1e-16), (5, 0.2)], []]
