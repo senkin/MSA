@@ -99,6 +99,7 @@ The pipeline processes inputs in the following priority order:
 | --COSMIC_signatures | false | If true, use COSMIC signatures from SigProfiler output; otherwise use de-novo |
 | --seed | null | RNG seed for the simulations and bootstrap resampling. If unset, a seed is derived from the Nextflow session ID; the seed used is always recorded in `pipeline_info/` (see [Reproducibility](#reproducibility)) |
 | --bootstrap_chunk_size | 0 | Bootstrap iterations per job. 0: one per job on CPU, all in one job on GPU. Results do not depend on it |
+| --bootstrap_method | binomial | Bootstrap resampling: `binomial`, `multinomial`, `multinomial_weight`, `poisson`, `classic` (mutation channels resampled with replacement) or `bootstrap_residuals` (residuals of the central fit resampled across channels and added back to it) |
 | --weak_thresholds | auto | Weak penalties scanned in the optimisation: `auto`, or an explicit list (config list, or comma-separated on the command line, e.g. `0,0.0001,0.0002,0.0003`). See [Penalty scan](#penalty-scan) |
 | --auto_weak_thresholds_number | 12 | Number of non-zero penalties chosen by `auto` (0 is always included) |
 | --auto_weak_thresholds_samples | 300 | Simulated samples whose removal trajectories choose the `auto` penalties (-1: all) |
@@ -230,9 +231,10 @@ jobs. If the selected penalty is the largest one scanned, a warning suggests ext
   solve); after editing `environment.yml`, regenerate the locks with `conda-lock/update_locks.sh`.
   `-profile docker/singularity/apptainer` use the MSA image pinned by digest
   (`params.container_image`). Pin Nextflow with `export NXF_VER=25.04.8`.
-* **Tests.** `python -m unittest discover -s tests -v` (CPU only, about a minute) checks that the
+* **Tests.** `python -m unittest discover -s tests -v` (CPU only, a few minutes) checks that the
   GPU code path gives the same attributions as the CPU path (including MSA's cuML wrapper, on a
-  NumPy stand-in for the GPU), and that simulations and bootstrap chunks are reproducible.
+  NumPy stand-in for the GPU), that simulations and bootstrap chunks are reproducible, and every
+  bootstrap method on every mutation type and SBS context.
   To compare the attributions of any two runs, e.g. CPU vs GPU, use
   `python bin/compare_attributions.py <reference dir> <candidate dir>`.
 
@@ -301,9 +303,9 @@ Alternatively, you can use *docker* with the provided *Dockerfile*, or use ready
 python bin/simulate_data.py -t SBS -c 96 -n 100 -s signature_tables
 ```
 
-* [input_mutation_tables/SIMrand](input_mutation_tables/SIMrand) folder contains simulated samples where each contains contributions from **5** randomly selected signatures out of **100** Poisson-generated signatures. To reproduce:
+* [input_mutation_tables/SIMrand](input_mutation_tables/SIMrand) folder contains simulated samples where each contains contributions from **5** randomly selected signatures out of **100** Poisson-generated signatures (the `sigRandom` tables in [signature_tables](signature_tables), generated with the legacy [legacy/generate_random_signatures.py](legacy/generate_random_signatures.py) script). To reproduce:
 ```bash
-python bin/generate_random_signatures.py -t SBS -c 96 -n 100
+python legacy/generate_random_signatures.py -t SBS -c 96 -n 100
 python bin/simulate_data.py -r -t SBS -c 96 -n 100 -d SIMrand
 ```
 

@@ -11,15 +11,39 @@ from numba import jit
 from common_methods import make_folder_if_not_exists, calculate_similarity, format_threshold
 
 # Vectorized bootstrap methods
-def bootstrap_mutation_table(input_dataframe, method="classic", fitted=None, residuals=None):
-    """Optimized bootstrap with vectorized operations."""
-    if method == "classic":
-        return input_dataframe.sample(n=len(input_dataframe), replace=True)
+BOOTSTRAP_METHODS = ['binomial', 'multinomial', 'multinomial_weight', 'poisson', 'classic',
+                     'bootstrap_residuals']
 
-    elif method == "bootstrap_residuals":
-        if residuals is None or fitted is None:
-            raise ValueError(f"Residuals and fitted values required for {method}")
-        return fitted + bootstrap_mutation_table(residuals, method="classic")
+
+def resample_channels(n_channels):
+    """Row positions of a classic (i.i.d., with replacement) resample of n_channels rows."""
+    # same draw as DataFrame.sample(n, replace=True) on the global RNG
+    return np.random.choice(n_channels, size=n_channels, replace=True)
+
+
+def bootstrap_mutation_table(input_dataframe, method="classic", fitted=None, residuals=None, rows=None):
+    """One bootstrap resample of a (channels x samples) mutation table.
+
+    classic: rows resampled with replacement (i.i.d. assumption); the resampled rows keep
+        the original channel labels, as rows are exchangeable under this assumption.
+    bootstrap_residuals: semi-parametric: fitted + residuals resampled across channels as
+        in classic, negative counts set to 0. input_dataframe is not used.
+    rows: row positions to use for classic / bootstrap_residuals (default: a new draw), so
+        several tables can share one resample.
+    """
+    if method in ("classic", "bootstrap_residuals"):
+        if method == "bootstrap_residuals":
+            if residuals is None or fitted is None:
+                raise ValueError(f"Residuals and fitted values required for {method}")
+            table = residuals
+        else:
+            table = input_dataframe
+        if rows is None:
+            rows = resample_channels(len(table))
+        resampled = pd.DataFrame(table.values[rows], index=table.index, columns=table.columns)
+        if method == "classic":
+            return resampled
+        return (fitted + resampled.values).clip(lower=0)
 
     elif method == "poisson":
         # Vectorized Poisson sampling
@@ -1205,6 +1229,35 @@ def attribute_at_thresholds(input_mutations, signatures, sel_sig_nums, args,
     return results, trajectories
 
 
+def bootstrap_attributions(input_mutations, signatures, sel_sig_nums, args,
+                           weak_thresholds, strong_thresholds, central=None):
+    """attribute_at_thresholds() outputs of one bootstrap resample of input_mutations
+    (args.bootstrap_method), by (weak, strong) threshold pair. Seed the global RNG first.
+
+    For bootstrap_residuals, central holds attribute_at_thresholds() of the original table
+    (aligned to the signatures): each pair resamples the residuals of its own central fit,
+    with one channel resample shared by all pairs.
+    """
+    method = args.bootstrap_method
+    if method != 'bootstrap_residuals':
+        resampled = bootstrap_mutation_table(input_mutations, method=method).reindex(signatures.index)
+        return attribute_at_thresholds(resampled, signatures, sel_sig_nums, args,
+                                       weak_thresholds, strong_thresholds)[0]
+    if central is None:
+        raise ValueError(f"{method} requires the central fit")
+    rows = resample_channels(len(signatures.index))
+    results, done = {}, {}
+    for (weak, strong), outputs in central.items():
+        # pairs sharing a central fit (removal ignores the strong threshold) share the result
+        if id(outputs) not in done:
+            _, _, _, residuals, fitted = outputs
+            resampled = bootstrap_mutation_table(None, method, fitted=fitted, residuals=residuals, rows=rows)
+            done[id(outputs)] = attribute_at_thresholds(resampled, signatures, sel_sig_nums, args,
+                                                        [weak], [strong])[0][(weak, strong)]
+        results[(weak, strong)] = done[id(outputs)]
+    return results
+
+
 def parse_thresholds(values, allow_auto=False):
     """-W/-S values -> sorted unique floats, or 'auto'."""
     if [v.lower() for v in values] == ['auto']:
@@ -1241,7 +1294,10 @@ if __name__ == '__main__':
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true")
     parser.add_argument("-n", "--number", dest="number_of_samples", default=-1, type=int)
     parser.add_argument("-B", "--bootstrap", dest="bootstrap", action="store_true")
-    parser.add_argument("--bootstrap_method", dest="bootstrap_method", default='binomial')
+    parser.add_argument("--bootstrap_method", dest="bootstrap_method", default='binomial',
+                        choices=BOOTSTRAP_METHODS,
+                        help="bootstrap_residuals resamples the residuals of the central fit, which "
+                             "is recomputed in-process at each threshold pair")
     parser.add_argument("--add_suffix", dest="add_suffix", action="store_true")
     parser.add_argument("--optimisation_strategy", dest="optimisation_strategy", default='removal')
     parser.add_argument("--n_bootstrap", dest="n_bootstrap", default=0, type=int,
@@ -1420,14 +1476,11 @@ if __name__ == '__main__':
         if args.number_of_samples != -1:
             input_mutations = input_mutations.iloc[:, :args.number_of_samples]
 
-        residuals_table = fitted_table = None
+        central = None
         if method == "bootstrap_residuals":
-            residuals_table = pd.read_csv(
-                f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_residuals.csv',
-                index_col=[0, 1, 2])
-            fitted_table = pd.read_csv(
-                f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_fitted_values.csv',
-                index_col=[0, 1, 2])
+            # the central fit whose residuals every iteration resamples
+            central, _ = attribute_at_thresholds(input_mutations.reindex(signatures.index), signatures,
+                                                 sel_sig_nums, args, weak_thresholds, strong_thresholds)
 
         for weak in weak_thresholds:
             for strong in strong_thresholds:
@@ -1447,15 +1500,8 @@ if __name__ == '__main__':
                 # that bootstrap_mutation_table() uses.
                 iter_seed = np.random.SeedSequence([args.seed, i]).generate_state(1)[0]
                 np.random.seed(int(iter_seed))
-            if method == "bootstrap_residuals":
-                resampled = bootstrap_mutation_table(input_mutations, method=method,
-                                                     fitted=fitted_table, residuals=residuals_table)
-            else:
-                resampled = bootstrap_mutation_table(input_mutations, method=method)
-            resampled = resampled.reindex(signatures.index)
-
-            results, _ = attribute_at_thresholds(resampled, signatures, sel_sig_nums, args,
-                                                 weak_thresholds, strong_thresholds)
+            results = bootstrap_attributions(input_mutations, signatures, sel_sig_nums, args,
+                                             weak_thresholds, strong_thresholds, central)
             for (weak, strong), (b_weights, b_mutations, b_stat_info, _, _) in results.items():
                 prefix = (f'{output_dir(weak, strong)}/bootstrap_output/'
                           f'output_{dataset_name}_{mutation_type}{bootstrap_suffix(weak, strong)}_{i}')
@@ -1467,49 +1513,40 @@ if __name__ == '__main__':
               f"({elapsed/args.n_bootstrap:.3f}s per iteration)")
     else:
         # ===== Single attribution (central run, or a single externally-indexed bootstrap) =====
-        # Bootstrap if requested
-        if args.bootstrap and args.seed is not None:
-            # Match the per-iteration seeding of the in-process loop: this single bootstrap
-            # is iteration `bootstrap_start_index`.
-            iter_seed = np.random.SeedSequence([args.seed, args.bootstrap_start_index]).generate_state(1)[0]
-            np.random.seed(int(iter_seed))
-        if args.bootstrap and args.bootstrap_method != "bootstrap_residuals":
-            input_mutations = bootstrap_mutation_table(input_mutations, method=args.bootstrap_method)
-
-        # Limit samples if specified
+        # Limit samples if specified (before resampling, as in the in-process loop)
         if args.number_of_samples != -1:
             input_mutations = input_mutations.iloc[:, :args.number_of_samples]
-
-        # Align indices
-        input_mutations = input_mutations.reindex(signatures.index)
-
-        # Handle bootstrap_residuals method
-        if args.bootstrap and args.bootstrap_method == "bootstrap_residuals":
-            residuals_df = pd.read_csv(f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_residuals.csv',
-                                       index_col=[0,1,2])
-            fitted_df = pd.read_csv(f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_fitted_values.csv',
-                                   index_col=[0,1,2])
-            input_mutations = bootstrap_mutation_table(input_mutations, method=args.bootstrap_method,
-                                                       fitted=fitted_df, residuals=residuals_df)
 
         # Process samples
         start_time = time.process_time()
 
-        trajectories = None
-        if auto:
-            # choose the weak thresholds from this data's removal trajectories, then reuse them
-            trajectories = removal_trajectories(input_mutations, signatures, sel_sig_nums, args)
-            weak_thresholds = auto_weak_thresholds([t for _, t in trajectories.values()], args.auto_thresholds)
-            print(f"Automatic weak thresholds ({len(trajectories)} samples): "
-                  f"{[format_threshold(w) for w in weak_thresholds]}")
-            if args.resolve_thresholds_only:
-                write_threshold_labels(args.thresholds_dir, weak_thresholds, strong_thresholds)
-                sys.exit(0)
+        if args.bootstrap:
+            # the same resample as iteration `bootstrap_start_index` of the in-process loop
+            central = None
+            if args.bootstrap_method == "bootstrap_residuals":
+                central, _ = attribute_at_thresholds(input_mutations.reindex(signatures.index), signatures,
+                                                     sel_sig_nums, args, weak_thresholds, strong_thresholds)
+            if args.seed is not None:
+                iter_seed = np.random.SeedSequence([args.seed, args.bootstrap_start_index]).generate_state(1)[0]
+                np.random.seed(int(iter_seed))
+            results = bootstrap_attributions(input_mutations, signatures, sel_sig_nums, args,
+                                             weak_thresholds, strong_thresholds, central)
+        else:
+            input_mutations = input_mutations.reindex(signatures.index)
+            trajectories = None
+            if auto:
+                # choose the weak thresholds from this data's removal trajectories, then reuse them
+                trajectories = removal_trajectories(input_mutations, signatures, sel_sig_nums, args)
+                weak_thresholds = auto_weak_thresholds([t for _, t in trajectories.values()], args.auto_thresholds)
+                print(f"Automatic weak thresholds ({len(trajectories)} samples): "
+                      f"{[format_threshold(w) for w in weak_thresholds]}")
+                if args.resolve_thresholds_only:
+                    write_threshold_labels(args.thresholds_dir, weak_thresholds, strong_thresholds)
+                    sys.exit(0)
+            results, _ = attribute_at_thresholds(input_mutations, signatures, sel_sig_nums, args,
+                                                 weak_thresholds, strong_thresholds, trajectories)
         if multi and args.thresholds_dir:
             write_threshold_labels(args.thresholds_dir, weak_thresholds, strong_thresholds)
-
-        results, _ = attribute_at_thresholds(input_mutations, signatures, sel_sig_nums, args,
-                                             weak_thresholds, strong_thresholds, trajectories)
 
         end_time = time.process_time()
         elapsed = end_time - start_time
@@ -1526,10 +1563,6 @@ if __name__ == '__main__':
             output_stat_info.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_stat_info.csv')
             residuals_df.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_residuals.csv')
             fitted_df.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_fitted_values.csv')
-
-            if not args.bootstrap:
-                residuals_df.to_csv(f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_residuals.csv')
-                fitted_df.to_csv(f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_fitted_values.csv')
 
             if _GPU_SOLVER is not None:
                 # Record the GPU environment next to the attribution it produced

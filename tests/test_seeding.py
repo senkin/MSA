@@ -17,8 +17,6 @@ import pandas as pd
 REPO = Path(__file__).resolve().parents[1]
 BIN = REPO / 'bin'
 SIGNATURES = REPO / 'signature_tables'
-sys.path.insert(0, str(BIN))
-import run_NNLS as R  # noqa: E402
 
 
 def run_script(script, *args, cwd):
@@ -82,27 +80,6 @@ class SeedingTest(unittest.TestCase):
         self.assertTrue((counts.values >= 0).all() and np.issubdtype(counts.values.dtype, np.integer))
         row_sums = weights.sum(axis=1).values
         self.assertTrue(np.all(row_sums <= 1 + 1e-9))  # true weights, minus zero-inflated ones
-
-
-class BootstrapMethodsTest(unittest.TestCase):
-
-    def setUp(self):
-        self.table = pd.read_csv(REPO / 'input_mutation_tables/SIM_test/WGS_SIM_test.96.csv', index_col=[0, 1])
-        self.table.iloc[:, 1] = 0  # a sample without mutations
-        np.random.seed(0)
-
-    def test_multinomial_keeps_totals(self):
-        resampled = R.bootstrap_mutation_table(self.table, 'multinomial')
-        self.assertTrue(resampled.index.equals(self.table.index) and resampled.columns.equals(self.table.columns))
-        np.testing.assert_array_equal(resampled.sum().values, self.table.sum().values)
-
-    def test_binomial_gives_counts(self):
-        resampled = R.bootstrap_mutation_table(self.table, 'binomial')
-        self.assertTrue(resampled.index.equals(self.table.index) and resampled.columns.equals(self.table.columns))
-        self.assertTrue((resampled.values >= 0).all())
-        np.testing.assert_array_equal(resampled.values, np.round(resampled.values))
-        self.assertEqual(resampled.iloc[:, 1].sum(), 0)
-        self.assertFalse(resampled.equals(self.table))
 
 
 if __name__ == '__main__':

@@ -336,10 +336,6 @@ workflow FINAL_NNLS_workflow {
             --optimisation_strategy ${params.optimisation_strategy} \\
             -W `< ${weak_penalty}` -S `< ${strong_penalty}` -n ${params.number_of_samples} \\
             -p ${signature_prefix} -i ${params.output_path}/temp/input_tables -s ${params.output_path}/temp/signature_tables -o "./" ${gpu_flag}
-
-        # Copy residuals and fitted values back to input tables
-        cp ${dataset}/output_${dataset}_${mutation_type}_residuals.csv ${params.output_path}/temp/input_tables/${dataset}/
-        cp ${dataset}/output_${dataset}_${mutation_type}_fitted_values.csv ${params.output_path}/temp/input_tables/${dataset}/
         """
     }
     
