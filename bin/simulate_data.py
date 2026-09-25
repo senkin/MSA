@@ -1,6 +1,7 @@
 import argparse
 import warnings
 import random
+import zlib
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -123,7 +124,21 @@ if __name__ == '__main__':
                         help="set path to input signature activities table to bootstrap")
     parser.add_argument("-I", "--inject_signatures", dest="inject_signatures", action="store_true",
                         help="inject additional signatures as specified in signatures_to_inject dictionary in the script")
+    parser.add_argument("--seed", dest="seed", default=None, type=int,
+                        help="Base RNG seed. When set, the simulation is reproducible: the random streams are seeded "
+                             "from (seed, dataset, mutation type, context), so each mutation type gets its own "
+                             "stream, independent of the bootstrap streams seeded from the same base seed. "
+                             "Default: non-deterministic.")
     args = parser.parse_args()
+
+    if args.seed is not None:
+        # Mix the base seed with a stable tag (zlib.crc32, not the salted built-in hash) so that
+        # simulations of different mutation types/contexts draw independent streams. Both the
+        # legacy numpy global RNG (np.random.*, pandas .sample) and Python's random are seeded.
+        stream_tag = zlib.crc32(f'simulate:{args.dataset_name}:{args.mutation_type}:{args.context}'.encode())
+        state = np.random.SeedSequence([args.seed, stream_tag]).generate_state(2)
+        np.random.seed(int(state[0]))
+        random.seed(int(state[1]))
 
     mutation_type = args.mutation_type
     dataset_name = args.dataset_name

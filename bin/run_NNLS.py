@@ -1,5 +1,7 @@
 import argparse
+import json
 import os
+import sys
 import warnings
 import pandas as pd
 import numpy as np
@@ -269,6 +271,43 @@ class _GpuBatchedSolver:
             raise ValueError(f"Unknown GPU precision '{precision}' (use mixed, fp32 or fp64)")
         self._mixed = self._solve_dtype != self._score_dtype
         self._cache = {}
+        self.precision = precision
+        self.auto_batch_size = None
+
+    def provenance(self):
+        """What produced a GPU result: device, driver/runtime, library versions, the
+        cuML build (commit recorded by setup_gpu_env.sh), precision and batch sizing.
+
+        Everything is best-effort: a missing field is reported, never raised.
+        """
+        info = {'precision': self.precision,
+                'rmm_pool_bytes': _GPU_POOL_BYTES,
+                'auto_batch_size': self.auto_batch_size}
+        try:
+            import cupy as cp
+            import rmm
+            import cuml
+            info['versions'] = {'cuml': getattr(cuml, '__version__', None),
+                                'cupy': getattr(cp, '__version__', None),
+                                'rmm': getattr(rmm, '__version__', None)}
+            dev_id = cp.cuda.Device().id
+            props = cp.cuda.runtime.getDeviceProperties(dev_id)
+            name = props.get('name', b'')
+            info['device'] = {'id': dev_id,
+                              'name': name.decode() if isinstance(name, bytes) else str(name),
+                              'compute_capability': f"{props.get('major')}.{props.get('minor')}",
+                              'total_memory_bytes': props.get('totalGlobalMem')}
+            info['cuda'] = {'driver_version': cp.cuda.runtime.driverGetVersion(),
+                            'runtime_version': cp.cuda.runtime.runtimeGetVersion()}
+        except Exception as e:  # provenance must never break a run
+            info['error'] = f'{type(e).__name__}: {e}'
+        build_file = os.path.join(sys.prefix, 'etc', 'msa_cuml_build.json')
+        try:
+            with open(build_file) as f:
+                info['cuml_build'] = json.load(f)
+        except OSError:
+            info['cuml_build'] = f'not recorded ({build_file} missing; see setup_gpu_env.sh)'
+        return info
 
     def _resident(self, A, B, norm_obs):
         """Device copies of the loop-invariant A, B, ||b||, cached by identity.
@@ -313,6 +352,7 @@ class _GpuBatchedSolver:
         budget = _CHUNK_MEM_FRACTION * _GPU_POOL_BYTES
         chunk = int(budget // per_problem) if per_problem > 0 else _CHUNK_MAX
         chunk = int(min(_CHUNK_MAX, max(_CHUNK_MIN, chunk)))
+        self.auto_batch_size = chunk
         if not getattr(self, '_chunk_logged', False):  # log once per process
             print(f"GPU auto batch size: {chunk} problems/call "
                   f"(n_channels={n_channels}, n_signatures={n_signatures}, "
@@ -1076,6 +1116,7 @@ if __name__ == '__main__':
     if getattr(args, 'use_gpu', False):
         configure_gpu_backend(args.gpu_precision)
         print(f"GPU backend enabled (cuML), precision: {args.gpu_precision}")
+        print("GPU provenance:", json.dumps(_GPU_SOLVER.provenance(), default=str))
 
     if args.n_bootstrap > 0:
         # ===== In-process bootstrap loop (P3) =====
@@ -1182,3 +1223,8 @@ if __name__ == '__main__':
         if not args.bootstrap:
             residuals_df.to_csv(f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_residuals.csv')
             fitted_df.to_csv(f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_fitted_values.csv')
+
+        if _GPU_SOLVER is not None:
+            # Record the GPU environment next to the attribution it produced
+            with open(f'{output_path}/gpu_provenance.json', 'w') as f:
+                json.dump(_GPU_SOLVER.provenance(), f, indent=2, default=str)

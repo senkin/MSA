@@ -1,10 +1,14 @@
 # Conda env for the GPU (cuML) NNLS processes  ->  params.gpu_conda_env
 #
 # The batched-NNLS cuML is BUILT FROM SOURCE (rapidsai/cuml PR #8402); it is not in
-# any released channel, so this is NOT a create-from-scratch environment. Create the
-# env from the expert's build file and build cuML into it:
+# any released channel, so this is NOT a create-from-scratch environment. Build it with
+# ./setup_gpu_env.sh, which fetches the pinned cuML commit (CUML_COMMIT, not the moving
+# fea-nnls tip), creates the env from that commit's build file (or from --lock), builds
+# cuML into it and records the build (etc/msa_cuml_build.json, etc/msa_gpu_env.lock.txt).
+# By hand, the equivalent is:
 #
-#   git clone -b fea-nnls https://github.com/achirkin/cuml.git && cd cuml
+#   git init cuml && cd cuml && git remote add origin https://github.com/achirkin/cuml.git
+#   git fetch --depth 1 origin <CUML_COMMIT> && git checkout --detach FETCH_HEAD
 #   conda env create -f conda/environments/all_cuda-133_arch-x86_64.yaml
 #   conda activate all_cuda-133_arch-x86_64
 #   ./build.sh libcuml cuml

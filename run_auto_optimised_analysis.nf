@@ -132,8 +132,50 @@ include { OPTIMAL_PENALTIES_workflow } from './modules/optimal_penalties'
 include { OPTIMISATION_PLOTS_workflow } from './modules/optimisation_plots'
 include { cleanup_workflow } from './modules/cleanup'
 
+// Write what is needed to reproduce this run (resolved seed, code revision, versions,
+// profile, all parameters) next to its results, in <output_path>/pipeline_info/.
+def write_run_info(run_seed, seed_source) {
+    def git_commit = 'n/a'
+    try {
+        def proc = ['git', '-C', "${workflow.projectDir}", 'rev-parse', 'HEAD'].execute()
+        proc.waitFor()
+        if (proc.exitValue() == 0) git_commit = proc.text.trim()
+    } catch (Exception ignored) { }
+    def info = [
+        'run name'         : workflow.runName,
+        'session id'       : workflow.sessionId,
+        'start'            : workflow.start,
+        'command line'     : workflow.commandLine,
+        'project dir'      : workflow.projectDir,
+        'revision'         : workflow.revision ?: 'n/a',
+        'commit id'        : workflow.commitId ?: git_commit,
+        'nextflow version' : workflow.nextflow.version,
+        'profile'          : workflow.profile,
+        'container engine' : workflow.containerEngine ?: 'none',
+        'container'        : workflow.container ?: 'none',
+        'rng seed'         : run_seed,
+        'rng seed source'  : seed_source,
+    ]
+    def lines = info.collect { k, v -> "${k.padRight(18)}: ${v}" }
+    lines << '' << 'params:'
+    lines.addAll(params.sort().collect { k, v -> "  ${k.padRight(46)}: ${v}" })
+    def info_dir = file("${params.output_path}/pipeline_info")
+    info_dir.mkdirs()
+    file("${info_dir}/run_info_${workflow.runName}.txt").text = lines.join('\n') + '\n'
+}
+
 // Main workflow
 workflow {
+    // Resolve the run-wide RNG seed once; it seeds both the simulations and the bootstrap
+    // resampling. Without --seed, a seed is derived from the Nextflow session ID: new for
+    // every fresh run, unchanged on -resume (so cached tasks stay valid), and recorded in
+    // pipeline_info/ so any run can be repeated exactly with --seed <value>.
+    def run_seed = params.seed != null ? (params.seed as long)
+        : ((workflow.sessionId.mostSignificantBits ^ workflow.sessionId.leastSignificantBits) & 0x7fffffffL)
+    def seed_source = params.seed != null ? '--seed' : 'derived from session ID'
+    log.info "RNG seed: ${run_seed} (${seed_source}; rerun with --seed ${run_seed} to reproduce)"
+    write_run_info(run_seed, seed_source)
+
     // Set up input channels based on parameters
     // Priority: specific files > SigProfiler outputs > default directories
     
@@ -227,7 +269,8 @@ workflow {
         // Run simulation workflow
         simulate_data_workflow(
             UnoptimizedNNLS.out.dataset_mutation_pairs,
-            UnoptimizedNNLS.out.mutations_table
+            UnoptimizedNNLS.out.mutations_table,
+            run_seed
         )
         
         def optimized_outputs = []
@@ -254,7 +297,8 @@ workflow {
                     signature_files_channel,
                     weak_threshold,
                     strong_threshold,
-                    params.number_of_bootstrapped_samples_in_optimisation
+                    params.number_of_bootstrapped_samples_in_optimisation,
+                    run_seed
                 )
                 bootstrap_outputs.add(OptimizedNNLSforBootstrap.out.bootstrap_done)
             }
@@ -305,7 +349,8 @@ workflow {
             OPTIMAL_PENALTIES_workflow.out.optimal_strong_penalty,
             input_files_channel,
             signature_files_channel,
-            params.number_of_bootstrapped_samples
+            params.number_of_bootstrapped_samples,
+            run_seed
         )
 
         // Generate final bootstrap tables after final bootstrap NNLS completes

@@ -15,7 +15,7 @@ Once you have installed Nextflow, run the test job locally or on your favourite 
 nextflow run https://gitlab.com/s.senkin/MSA -profile conda,test
 ```
 
-**Important**: The pipeline has been updated to Nextflow DSL2 and requires Nextflow version 21.04.0 or later. The version can be changed using the following command:
+**Important**: The pipeline uses Nextflow DSL2 and is tested with Nextflow 25.04.8 (`nextflowVersion = '>=25.04.0'` in the manifest). Pin the version for reproducible runs:
 
 ```bash
 export NXF_VER=25.04.8
@@ -97,6 +97,8 @@ The pipeline processes inputs in the following priority order:
 | --number_of_samples | -1 | Number of samples to analyse (-1 means all available) |
 | --SBS_context | 96 | SBS context to use (96, 192, 288, 1536, or 4608) |
 | --COSMIC_signatures | false | If true, use COSMIC signatures from SigProfiler output; otherwise use de-novo |
+| --seed | null | RNG seed for the simulations and bootstrap resampling. If unset, a seed is derived from the Nextflow session ID; the seed used is always recorded in `pipeline_info/` (see [Reproducibility](#reproducibility)) |
+| --bootstrap_chunk_size | 0 | Bootstrap iterations per job. 0: one per job on CPU, all in one job on GPU. Results do not depend on it |
 <!-- | --signatures_to_prioritise | null | set a list of signatures to prioritise in penalty calculation (only these will be used to calculate optimal penalty) |
 | --signatures_to_deprioritise | null | set a list of signatures to deprioritise (these will be excluded in penalty calculation) |
 | --no_CI_for_penalties | false | do not use confidence intervals for optimal penalties calculation | -->
@@ -115,6 +117,7 @@ output_path/
 │       └── bootstrap_output/
 ├── output_tables_unoptimised/  # Unoptimized results
 ├── plots/                      # All generated plots
+├── pipeline_info/              # run_info_<run name>.txt: seed, code revision, versions, parameters
 └── temp/                       # Temporary conversions
     ├── input_tables/
     └── signature_tables/
@@ -138,6 +141,22 @@ affect the default CPU behaviour.
    Match the CUDA version to the driver on your GPU nodes (`nvidia-smi` shows the maximum
    supported CUDA). The script prints the full env path to use in the next step.
 
+   cuML is built from a pinned commit of the `fea-nnls` branch (`CUML_COMMIT` in the script;
+   `--commit` or `--unpinned` to change it), and the build is recorded in the env:
+   `etc/msa_cuml_build.json` (commit, options, versions — copied into every GPU result as
+   `gpu_provenance.json` / the task log) and `etc/msa_gpu_env.lock.txt` (every conda package).
+   The cuML build env uses RAPIDS nightly packages, which are removed after a while, so keep
+   that lock: `./setup_gpu_env.sh --lock msa_gpu_env.lock.txt` rebuilds the same env elsewhere.
+
+   Before relying on a new env, validate it on a GPU node against the CPU (fp64) reference.
+   This checks GPU fp64 against CPU, repeatability, independence from the batch size, and the
+   default `mixed` precision against fp64 (a small fraction of attributions may legitimately
+   differ: greedy decisions that sit within rounding error of the threshold):
+
+   ```bash
+   tests/gpu_acceptance.sh --gpu-python /path/to/gpu-env/bin/python --cpu-python /path/to/msa-env/bin/python
+   ```
+
 2. **Enable it** in [nextflow.config](nextflow.config) (or on the command line). `gpu_conda_env`
    must be the **full path** to the built env — a bare name is treated by Nextflow's `conda`
    directive as a package to install:
@@ -157,6 +176,28 @@ Then run with a conda-enabled profile:
 ```bash
 nextflow run run_auto_optimised_analysis.nf -profile conda,test_GPU -c gpu.config
 ```
+
+By default each GPU bootstrap runs as a single job. To spread it over several GPUs, set
+`--bootstrap_chunk_size` (e.g. `250` runs 1000 iterations as 4 GPU jobs; `test_GPU` does this).
+Iteration `i` is always seeded from `(seed, i)`, so the split does not change the results.
+
+## Reproducibility
+
+* **Random seed.** One seed drives the simulations and the bootstrap resampling. Without
+  `--seed`, a seed is derived from the Nextflow session ID (new for each fresh run, unchanged
+  on `-resume`). The seed actually used is logged and written, with the code revision, Nextflow
+  version, profile and all parameters, to `<output_path>/pipeline_info/run_info_<run name>.txt`;
+  passing it back with `--seed` reproduces the run.
+* **Software.** `-profile conda` installs the exact lock of [environment.yml](environment.yml) for
+  your platform from [conda-lock/](conda-lock) (`--conda_env environment.yml` for an unpinned
+  solve); after editing `environment.yml`, regenerate the locks with `conda-lock/update_locks.sh`.
+  `-profile docker/singularity/apptainer` use the MSA image pinned by digest
+  (`params.container_image`). Pin Nextflow with `export NXF_VER=25.04.8`.
+* **Tests.** `python -m unittest discover -s tests -v` (CPU only, about a minute) checks that the
+  GPU code path gives the same attributions as the CPU path (including MSA's cuML wrapper, on a
+  NumPy stand-in for the GPU), and that simulations and bootstrap chunks are reproducible.
+  To compare the attributions of any two runs, e.g. CPU vs GPU, use
+  `python bin/compare_attributions.py <reference dir> <candidate dir>`.
 
 ## Running manually
 
@@ -202,6 +243,9 @@ Set up the virtual environment using [conda](https://conda.io):
 ```bash
 conda env create -f environment.yml
 ```
+
+For the exact, pinned environment use the lock file for your platform instead
+(`conda create -n msa --file conda-lock/environment.linux-64.txt`).
 
 This only needs to be done once. Afterwards, activate the environment:
 

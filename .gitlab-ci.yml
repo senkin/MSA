@@ -1,9 +1,21 @@
-
 stages:
   - test
 
+variables:
+  NXF_VER: "25.04.8"
+
+# pinned by digest: the same image as params.container_image (amd64) in nextflow.config
+.msa_image: &msa_image
+  image: ssenkin/msa:amd64@sha256:7dfb6a4c0fc4a6865b1d67a4d0b506a52db83ac43c43fe1bf0d9bc794acf6e1c
+
+unit_tests:
+  <<: *msa_image
+  stage: test
+  script:
+    - mamba run -n MSA python -m unittest discover -s tests -v
+
 test_nextflow:
-  image: ssenkin/msa:amd64
+  <<: *msa_image
   stage: test
   script:
     - mamba run -n MSA nextflow run run_auto_optimised_analysis.nf -profile test

@@ -13,7 +13,15 @@
 # ENV PATH it prints (e.g. ~/miniforge3/envs/all_cuda-133_arch-x86_64) - a bare name
 # would be treated by Nextflow's conda directive as a package to install.
 #
-# It is idempotent: an existing clone or conda env is reused (delete them to rebuild).
+# Reproducibility: cuML is built from a pinned commit (not the moving branch tip), and
+# the script records what it built in the env: etc/msa_cuml_build.json (commit, build
+# options, versions; run_NNLS.py copies it into every GPU result) and
+# etc/msa_gpu_env.lock.txt (explicit lock of every conda package). The RAPIDS build
+# env pulls nightly packages that are later removed, so keep that lock: --lock rebuilds
+# the same env elsewhere (while its packages are still downloadable).
+#
+# It is idempotent: an existing conda env is reused, and so is an existing clone if it
+# is at the pinned commit (delete them to rebuild).
 
 set -euo pipefail
 
@@ -26,6 +34,10 @@ Usage: ./setup_gpu_env.sh [options]
   -e, --env-name NAME   conda env name to create    (default: <cuda-env>)
   -c, --cuda-env NAME   RAPIDS env file basename     (default: all_cuda-133_arch-x86_64)
   -b, --branch NAME     cuml branch                  (default: fea-nnls)
+  -C, --commit SHA      cuml commit to build         (default: pinned, see CUML_COMMIT below)
+      --unpinned        build the current tip of --branch instead (its commit is recorded)
+  -l, --lock FILE       create the env from an explicit lock (etc/msa_gpu_env.lock.txt of an
+                        env built before) instead of the RAPIDS env file
   -r, --repo URL        cuml repo                    (default: achirkin/cuml)
       --allgpuarch      build for all GPU archs (portable, slower) instead of native
       --no-overlay      skip applying environment_gpu.yml
@@ -36,6 +48,12 @@ EOF
 # --- defaults (override via flags or env) -----------------------------------
 REPO_URL="${CUML_REPO_URL:-https://github.com/achirkin/cuml.git}"
 BRANCH="${CUML_BRANCH:-fea-nnls}"
+# fea-nnls tip on 2026-09-21: the batched solver as of 2026-07-22 (what MSA's GPU backend
+# was developed against) plus a fix for breaking RMM changes. Update deliberately, then
+# re-run tests/gpu_acceptance.sh.
+COMMIT="${CUML_COMMIT:-5ecf8607a80f4ae7487eaa3edea7bcd5acdf279c}"
+UNPINNED=0
+LOCK_FILE=""
 CUDA_ENV="${CUML_CUDA_ENV:-all_cuda-133_arch-x86_64}"   # conda/environments/<CUDA_ENV>.yaml
 ENV_NAME="${GPU_ENV_NAME:-}"                            # defaults to $CUDA_ENV below
 BUILD_DIR="${CUML_BUILD_DIR:-$PWD/cuml-build}"
@@ -52,6 +70,9 @@ while [[ $# -gt 0 ]]; do
     -e|--env-name)  ENV_NAME="$2"; shift 2 ;;
     -c|--cuda-env)  CUDA_ENV="$2"; shift 2 ;;
     -b|--branch)    BRANCH="$2"; shift 2 ;;
+    -C|--commit)    COMMIT="$2"; shift 2 ;;
+    --unpinned)     UNPINNED=1; shift ;;
+    -l|--lock)      LOCK_FILE="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"; shift 2 ;;
     -r|--repo)      REPO_URL="$2"; shift 2 ;;
     --allgpuarch)   ALLGPUARCH=1; shift ;;
     --no-overlay)   APPLY_OVERLAY=0; shift ;;
@@ -75,8 +96,8 @@ source "$CONDA_BASE/etc/profile.d/conda.sh"
 
 cat <<EOF
 >>> GPU (cuML) env setup for MSA
-    repo      : $REPO_URL @ $BRANCH
-    cuda env  : conda/environments/$CUDA_ENV.yaml
+    repo      : $REPO_URL @ $([[ $UNPINNED == 1 ]] && echo "$BRANCH (tip, unpinned)" || echo "$COMMIT ($BRANCH)")
+    env from  : ${LOCK_FILE:-conda/environments/$CUDA_ENV.yaml}
     env name  : $ENV_NAME
     build dir : $BUILD_DIR
     gpu archs : $([[ $ALLGPUARCH == 1 ]] && echo 'all (portable)' || echo 'native (this node)')
@@ -84,14 +105,33 @@ cat <<EOF
     overlay   : $([[ $APPLY_OVERLAY == 1 ]] && echo "$OVERLAY_YAML" || echo skip)
 EOF
 
-# --- 1. clone (or reuse) the branch ----------------------------------------
+# --- 1. fetch the pinned commit (or reuse a clone that is at it) -----------
+REF="$([[ $UNPINNED == 1 ]] && echo "$BRANCH" || echo "$COMMIT")"
 if [[ -d "$BUILD_DIR/.git" ]]; then
-  echo ">>> Reusing existing clone at $BUILD_DIR"
+  HEAD_SHA="$(git -C "$BUILD_DIR" rev-parse HEAD)"
+  if [[ $UNPINNED == 0 && "$HEAD_SHA" != "$COMMIT" ]]; then
+    echo "error: $BUILD_DIR is at $HEAD_SHA, not the pinned $COMMIT;" \
+         "delete it or choose another --build-dir" >&2
+    exit 1
+  fi
+  echo ">>> Reusing existing clone at $BUILD_DIR ($HEAD_SHA)"
+elif [[ -e "$BUILD_DIR" ]]; then
+  echo "error: $BUILD_DIR exists but is not a git clone" >&2; exit 1
 else
-  echo ">>> Cloning $REPO_URL ($BRANCH)"
-  git clone --depth 1 -b "$BRANCH" "$REPO_URL" "$BUILD_DIR"
+  echo ">>> Fetching $REPO_URL @ $REF"
+  git init -q "$BUILD_DIR"
+  git -C "$BUILD_DIR" remote add origin "$REPO_URL"
+  if ! git -C "$BUILD_DIR" fetch -q --depth 1 origin "$REF"; then
+    rm -rf "$BUILD_DIR"
+    echo "error: could not fetch $REF from $REPO_URL (if the branch was rewritten," \
+         "choose a new --commit)" >&2
+    exit 1
+  fi
+  git -C "$BUILD_DIR" checkout -q --detach FETCH_HEAD
 fi
 cd "$BUILD_DIR"
+CUML_SHA="$(git rev-parse HEAD)"
+echo "    cuml commit: $CUML_SHA"
 
 ENV_YAML="conda/environments/$CUDA_ENV.yaml"
 [[ -f "$ENV_YAML" ]] || { echo "error: env file not found: $BUILD_DIR/$ENV_YAML" >&2; exit 1; }
@@ -99,6 +139,9 @@ ENV_YAML="conda/environments/$CUDA_ENV.yaml"
 # --- 2. create (or reuse) the conda env ------------------------------------
 if "$CONDA_EXE" env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
   echo ">>> Conda env '$ENV_NAME' already exists, reusing (delete it to rebuild from scratch)"
+elif [[ -n "$LOCK_FILE" ]]; then
+  echo ">>> Creating conda env '$ENV_NAME' from lock $LOCK_FILE"
+  "$SOLVER_EXE" create -y -n "$ENV_NAME" --file "$LOCK_FILE"
 else
   echo ">>> Creating conda env '$ENV_NAME' from $ENV_YAML"
   "$SOLVER_EXE" env create -n "$ENV_NAME" -f "$ENV_YAML"
@@ -127,7 +170,33 @@ if [[ $APPLY_OVERLAY == 1 && -f "$OVERLAY_YAML" ]]; then
   "$SOLVER_EXE" env update -n "$ENV_NAME" -f "$OVERLAY_YAML"
 fi
 
-# --- 5. verify --------------------------------------------------------------
+# --- 5. record what was built ------------------------------------------------
+# run_NNLS.py copies etc/msa_cuml_build.json into the provenance of every GPU result.
+echo ">>> Recording the build in $ENV_PREFIX/etc/"
+mkdir -p "$ENV_PREFIX/etc"
+"$CONDA_EXE" list --explicit --md5 -p "$ENV_PREFIX" > "$ENV_PREFIX/etc/msa_gpu_env.lock.txt"
+MSA_REPO="$REPO_URL" MSA_BRANCH="$BRANCH" MSA_COMMIT="$CUML_SHA" MSA_UNPINNED="$UNPINNED" \
+MSA_ENV_FROM="${LOCK_FILE:-$BUILD_DIR/$ENV_YAML}" MSA_ALLGPUARCH="$ALLGPUARCH" \
+MSA_NVCC="$(nvcc --version 2>/dev/null | tail -1 || echo unknown)" \
+python - "$ENV_PREFIX/etc/msa_cuml_build.json" <<'PY'
+import datetime, importlib.metadata, json, os, socket, sys
+e = os.environ
+try:
+    cuml_version = importlib.metadata.version('cuml')
+except importlib.metadata.PackageNotFoundError:
+    cuml_version = 'unknown'
+json.dump({
+    'repo': e['MSA_REPO'], 'branch': e['MSA_BRANCH'], 'commit': e['MSA_COMMIT'],
+    'pinned': e['MSA_UNPINNED'] != '1', 'cuml_version': cuml_version,
+    'env_created_from': e['MSA_ENV_FROM'],
+    'gpu_archs': 'all' if e['MSA_ALLGPUARCH'] == '1' else 'native (build node)',
+    'nvcc': e['MSA_NVCC'], 'built_on': socket.gethostname(),
+    'built_at': datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'),
+    'env_lock': os.path.join(sys.prefix, 'etc', 'msa_gpu_env.lock.txt'),
+}, open(sys.argv[1], 'w'), indent=2)
+PY
+
+# --- 6. verify --------------------------------------------------------------
 echo ">>> Verifying imports"
 python - <<'PY'
 import importlib, sys
@@ -160,10 +229,15 @@ PY
 
 cat <<EOF
 
->>> Done. In nextflow.config (or via --gpu_conda_env) set:
+>>> Done (cuml $CUML_SHA). In nextflow.config (or via --gpu_conda_env) set:
         use_GPU       = true
         gpu_conda_env = '$ENV_PREFIX'
     (use this full path, not the bare env name - Nextflow's conda directive treats
     a bare name as a package to install). Run with a conda-enabled profile
     (e.g. -profile conda) so the labelled NNLS processes pick up this env.
+
+    Build record: $ENV_PREFIX/etc/msa_cuml_build.json
+    Env lock:     $ENV_PREFIX/etc/msa_gpu_env.lock.txt  (keep it; --lock rebuilds this env)
+    Before relying on it, validate the env on a GPU node:
+        tests/gpu_acceptance.sh --gpu-python $ENV_PREFIX/bin/python --cpu-python <MSA CPU env python>
 EOF

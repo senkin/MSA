@@ -8,6 +8,7 @@ workflow simulate_data_workflow {
     take:
     dataset_mutation_pairs // tuple of (dataset, mutation_type)
     mutations_table // path to mutations table
+    seed // run-wide RNG seed (resolved in the main script)
     // signature_files // path to signature files
 
     main:
@@ -18,6 +19,7 @@ workflow simulate_data_workflow {
         input:
         tuple val(dataset), val(mutation_type)
         path mutations_table
+        val seed
         // path signature_files
 
         output:
@@ -39,14 +41,16 @@ workflow simulate_data_workflow {
             --zero_inflation_threshold ${params.zero_inflation_threshold} \
             -i ${mutations_table} \
             -s ${params.output_path}/temp/signature_tables \
-            -o "./"
+            -o "./" \
+            --seed ${seed}
         """
     }
 
     // Execute simulation for each dataset/mutation_type pair
     simulate_data(
         dataset_mutation_pairs,
-        mutations_table
+        mutations_table,
+        seed
     )
 
     emit:
