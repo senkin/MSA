@@ -31,14 +31,20 @@ def make_folder_if_not_exists(folder):
             warnings.warn("Could not create a folder %s" % folder)
 
 def format_threshold(threshold):
-    """Convert float threshold to clean string for filenames"""
+    """Convert float threshold to clean string for filenames.
+
+    Values with at most 6 decimals keep their plain form (0.0001 -> '0.0001'); anything
+    else uses the shortest exact form (1.2e-07 -> '1.2e-07'), so distinct thresholds
+    never share a label and float(label) == threshold.
+    """
     if threshold == 0.0:
         return "0"
     elif threshold == int(threshold):
         return str(int(threshold))
     else:
         # Remove trailing zeros and decimal point if not needed
-        return f"{threshold:.6f}".rstrip('0').rstrip('.')
+        label = f"{threshold:.6f}".rstrip('0').rstrip('.')
+        return label if float(label) == threshold else repr(float(threshold))
 
 def merge_plots(input_plots_filenames, merged_plot_filename, merge_tool = 'pdfunite'):
     if is_tool(merge_tool):

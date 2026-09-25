@@ -761,6 +761,134 @@ def select_from_trajectory(active_cols, trajectory, weak_threshold):
     return [c for c in active_cols if c not in removed]
 
 
+def remove_weak_signatures_batched_trajectory(sig_values, B, norm_obs, masks, idx=8, chunk_size=4096):
+    """Batched (GPU-path) counterpart of remove_weak_signatures_trajectory().
+
+    Runs exactly the greedy steps of remove_weak_signatures_batched() - same trial
+    batches, same base-similarity update from the chosen trial - but never stops: every
+    sample is followed down to a single signature. select_from_trajectory() on the
+    result reproduces remove_weak_signatures_batched() at any weak_threshold, provided
+    the solver's per-problem results do not depend on how problems are batched
+    (checked on real GPUs by tests/gpu_acceptance.sh).
+
+    Returns
+    -------
+    list of trajectories, one per column of B: [(dropped_col, contribution), ...]
+    """
+    if idx != 8:
+        raise ValueError("Batched removal only supports the L2_normalised_by_first metric")
+
+    masks = masks.copy()
+    n_sig, N = masks.shape
+    base_sim = batched_solve_and_score(sig_values, B, norm_obs, masks, np.arange(N), chunk_size)
+    trajectories = [[] for _ in range(N)]
+    active = np.flatnonzero(masks.sum(axis=0) > 1)
+    samples_per_group = max(1, chunk_size // max(1, n_sig))
+
+    while active.size:
+        still_active = []
+        for group_start in range(0, active.size, samples_per_group):
+            group = active[group_start:group_start + samples_per_group]
+
+            cols_per_sample = [np.flatnonzero(masks[:, j]) for j in group]
+            counts = np.array([c.size for c in cols_per_sample])
+            offsets = np.zeros(group.size + 1, dtype=np.int64)
+            np.cumsum(counts, out=offsets[1:])
+            n_trials = int(offsets[-1])
+
+            trial_masks = np.empty((n_sig, n_trials), dtype=bool)
+            trial_bidx = np.empty(n_trials, dtype=np.int64)
+            for s, j in enumerate(group):
+                lo, hi = offsets[s], offsets[s + 1]
+                trial_masks[:, lo:hi] = masks[:, j][:, None]
+                trial_masks[cols_per_sample[s], np.arange(lo, hi)] = False
+                trial_bidx[lo:hi] = j
+
+            sims = batched_solve_and_score(sig_values, B, norm_obs, trial_masks, trial_bidx, chunk_size)
+
+            for s, j in enumerate(group):
+                lo, hi = offsets[s], offsets[s + 1]
+                contributions = base_sim[j] - sims[lo:hi]
+                p_weakest = int(np.argmin(contributions))
+                dropped = int(cols_per_sample[s][p_weakest])
+                trajectories[j].append((dropped, float(contributions[p_weakest])))
+                masks[dropped, j] = False
+                base_sim[j] = sims[lo + p_weakest]
+                if masks[:, j].sum() > 1:
+                    still_active.append(j)
+
+        active = np.asarray(still_active, dtype=np.int64)
+
+    return trajectories
+
+
+# Percentiles of the pooled trajectory breakpoints spanned by the automatic thresholds
+AUTO_THRESHOLD_PERCENTILES = (5, 95)
+# Breakpoints below this are numerical noise (removing signatures with zero weight, whose
+# contribution is +-1e-16 in fp64 and ~1e-8 on a GPU in fp32) and are ignored; the
+# no-removal end of the scan is covered by always including 0.
+AUTO_THRESHOLD_FLOOR = 1e-6
+
+
+def auto_weak_thresholds(trajectories, n_thresholds=12, percentiles=AUTO_THRESHOLD_PERCENTILES,
+                         floor=AUTO_THRESHOLD_FLOOR):
+    """Weak thresholds to scan, chosen from removal trajectories.
+
+    A sample's surviving signature set only changes where the threshold crosses a
+    running maximum of its removal contributions (select_from_trajectory() stops at the
+    first contribution >= threshold). These breakpoints are pooled over all samples;
+    the result is 0 (plain NNLS) plus n_thresholds values log-spaced between the given
+    percentiles of the breakpoints >= floor, rounded to 2 significant digits.
+    """
+    breakpoints = [np.maximum.accumulate([c for _, c in t]) for t in trajectories if t]
+    breakpoints = np.concatenate(breakpoints) if breakpoints else np.empty(0)
+    breakpoints = breakpoints[breakpoints >= floor]
+    if breakpoints.size == 0 or n_thresholds < 1:
+        return [0.0]
+    low, high = np.percentile(breakpoints, percentiles)
+    values = [low] if n_thresholds == 1 or high <= low else np.geomspace(low, high, n_thresholds)
+    return [0.0] + sorted({float(f'{v:.2g}') for v in values})
+
+
+def removal_trajectories(input_mutations, signatures, sel_sig_nums, args):
+    """One removal trajectory per sample, {sample position: (active_cols, trajectory)}.
+
+    Mirrors process_samples_batch(): the batched trajectory in GPU mode, the per-sample
+    one otherwise, with the same inputs, so that process_samples_batch(...,
+    trajectories=...) reproduces a per-threshold run at every weak threshold.
+    Samples without mutations are left out, as process_samples_batch() skips them.
+    """
+    initial_signatures = signatures.iloc[:, sel_sig_nums]
+    name_to_col = {name: i for i, name in enumerate(signatures.columns)}
+    sig_values = np.asarray(signatures.values, dtype=float)
+    initial_cols = [name_to_col[name] for name in initial_signatures.columns]
+
+    valid = [(s_i, input_mutations[sample].values) for s_i, sample in enumerate(input_mutations.columns)
+             if not input_mutations[sample].values.sum() <= 0]  # same test as process_samples_batch
+    if not valid or initial_signatures.empty:
+        return {}
+
+    if getattr(args, 'use_gpu', False):
+        B = np.column_stack([np.asarray(values, dtype=float) for _, values in valid])
+        norm_obs = np.array([np.linalg.norm(B[:, j]) for j in range(B.shape[1])])
+        gpu_chunk = getattr(args, 'gpu_batch_size', 0)
+        if gpu_chunk <= 0:
+            gpu_chunk = _GPU_SOLVER.suggest_chunk(sig_values.shape[0], sig_values.shape[1])
+        masks = np.zeros((sig_values.shape[1], B.shape[1]), dtype=bool)
+        masks[initial_cols, :] = True
+        batched = remove_weak_signatures_batched_trajectory(sig_values, B, norm_obs, masks,
+                                                            chunk_size=gpu_chunk)
+        # the batched path reports surviving columns in ascending order (np.flatnonzero)
+        return {s_i: (sorted(initial_cols), batched[j]) for j, (s_i, _) in enumerate(valid)}
+
+    trajectories = {}
+    for s_i, values in valid:
+        observed = np.asarray(values, dtype=float)
+        trajectories[s_i] = remove_weak_signatures_trajectory(observed, np.linalg.norm(observed),
+                                                              sig_values, initial_cols)
+    return trajectories
+
+
 def add_strong_signatures(observed, norm_obs, sig_values, active_cols, candidate_cols, col_names,
                           strong_threshold=0.05, idx=8, verbose=False):
     """Greedy addition of strong signatures drawn from ``candidate_cols``.
@@ -888,12 +1016,16 @@ def optimise_signatures(selected_mutations, initial_signatures, all_available_si
     return all_available_signatures.loc[:, final_names]
 
 
-def process_samples_batch(input_mutations, signatures, sel_sig_nums, args):
+def process_samples_batch(input_mutations, signatures, sel_sig_nums, args, trajectories=None):
     """Process all samples, accumulating results in preallocated numpy arrays.
 
     Per-sample results are written into numpy arrays and assembled into output
     DataFrames once at the end. The original implementation assigned into
     DataFrames row-by-row via .loc, which is slow at scale.
+
+    ``trajectories`` (from removal_trajectories(), removal strategy only) replaces the
+    greedy optimisation by select_from_trajectory() at args.weak_threshold; everything
+    else is unchanged, so the output is identical to a run without it.
     """
     samples = list(input_mutations.columns)
     signature_columns_list = signatures.columns[sel_sig_nums].tolist()
@@ -973,14 +1105,18 @@ def process_samples_batch(input_mutations, signatures, sel_sig_nums, args):
             # match the scalar path's per-sample norm computation exactly
             norm_obs = np.array([np.linalg.norm(B[:, j]) for j in range(B.shape[1])])
 
-            gpu_chunk = getattr(args, 'gpu_batch_size', 0)
-            if gpu_chunk <= 0:  # auto-size the batch to the GPU's memory
-                gpu_chunk = _GPU_SOLVER.suggest_chunk(sig_values.shape[0], sig_values.shape[1])
-            per_sample_cols = optimise_signatures_batched(
-                B, norm_obs, sig_values, initial_cols,
-                strategy=args.optimisation_strategy,
-                weak_threshold=args.weak_threshold,
-                chunk_size=gpu_chunk)
+            if trajectories is not None:
+                per_sample_cols = [select_from_trajectory(*trajectories[s_i], args.weak_threshold)
+                                   for s_i in valid_s_i]
+            else:
+                gpu_chunk = getattr(args, 'gpu_batch_size', 0)
+                if gpu_chunk <= 0:  # auto-size the batch to the GPU's memory
+                    gpu_chunk = _GPU_SOLVER.suggest_chunk(sig_values.shape[0], sig_values.shape[1])
+                per_sample_cols = optimise_signatures_batched(
+                    B, norm_obs, sig_values, initial_cols,
+                    strategy=args.optimisation_strategy,
+                    weak_threshold=args.weak_threshold,
+                    chunk_size=gpu_chunk)
 
             for j, s_i in enumerate(valid_s_i):
                 final_names = [all_names[c] for c in per_sample_cols[j]]
@@ -1003,7 +1139,10 @@ def process_samples_batch(input_mutations, signatures, sel_sig_nums, args):
                 warnings.warn(f"Sample {sample}: Zero mutations, skipping")
                 continue
 
-            if args.optimise_signatures:
+            if args.optimise_signatures and trajectories is not None:
+                keep = select_from_trajectory(*trajectories[s_i], args.weak_threshold)
+                final_signatures = signatures.loc[:, [signatures.columns[c] for c in keep]]
+            elif args.optimise_signatures:
                 final_signatures = optimise_signatures(
                     selected_mutations, initial_signatures, signatures,
                     strategy=args.optimisation_strategy,
@@ -1038,6 +1177,51 @@ def process_samples_batch(input_mutations, signatures, sel_sig_nums, args):
     return output_weights, output_mutations, output_stat_info, residuals_dataframe, fitted_dataframe
 
 
+def attribute_at_thresholds(input_mutations, signatures, sel_sig_nums, args,
+                            weak_thresholds, strong_thresholds, trajectories=None):
+    """process_samples_batch() outputs for every (weak, strong) threshold pair.
+
+    With the removal strategy and several weak thresholds, the greedy removal runs once
+    per sample (removal_trajectories(), unless args.threshold_scan == 'separate') and each
+    threshold replays it; other strategies run once per pair as before. The removal
+    strategy ignores the strong threshold, so its results are shared across strong values.
+    Returns ({(weak, strong): outputs}, trajectories or None).
+    """
+    removal = args.optimise_signatures and args.optimisation_strategy == 'removal'
+    if (trajectories is None and removal and len(weak_thresholds) > 1
+            and getattr(args, 'threshold_scan', 'trajectory') == 'trajectory'):
+        trajectories = removal_trajectories(input_mutations, signatures, sel_sig_nums, args)
+
+    results = {}
+    for weak in weak_thresholds:
+        for strong in strong_thresholds:
+            if removal and (weak, strong_thresholds[0]) in results:
+                results[(weak, strong)] = results[(weak, strong_thresholds[0])]
+                continue
+            pair_args = argparse.Namespace(**vars(args))
+            pair_args.weak_threshold, pair_args.strong_threshold = weak, strong
+            results[(weak, strong)] = process_samples_batch(input_mutations, signatures, sel_sig_nums,
+                                                            pair_args, trajectories)
+    return results, trajectories
+
+
+def parse_thresholds(values, allow_auto=False):
+    """-W/-S values -> sorted unique floats, or 'auto'."""
+    if [v.lower() for v in values] == ['auto']:
+        if not allow_auto:
+            raise ValueError("'auto' is only supported for the weak threshold")
+        return 'auto'
+    return sorted({float(v) for v in values})
+
+
+def write_threshold_labels(folder, weak_thresholds, strong_thresholds):
+    """Write the threshold labels used in output names, one per line (for the pipeline)."""
+    make_folder_if_not_exists(folder)
+    for name, values in (('weak', weak_thresholds), ('strong', strong_thresholds)):
+        with open(f'{folder}/{name}_thresholds.txt', 'w') as f:
+            f.write(''.join(f'{format_threshold(v)}\n' for v in values))
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("-d", "--dataset", dest="dataset_name", default='SIM')
@@ -1048,8 +1232,11 @@ if __name__ == '__main__':
     parser.add_argument("-p", "--signature_prefix", dest="signatures_prefix", default='sigProfiler')
     parser.add_argument("-o", "--output_path", dest="output_path", default='output_tables/')
     parser.add_argument("-x", "--optimise_signatures", dest="optimise_signatures", action="store_true")
-    parser.add_argument("-W", "--weak_threshold", dest="weak_threshold", default=0.01, type=float)
-    parser.add_argument("-S", "--strong_threshold", dest="strong_threshold", default=0.01, type=float)
+    parser.add_argument("-W", "--weak_threshold", dest="weak_threshold", nargs='+', default=['0.01'],
+                        help="Weak threshold(s). Several values, or 'auto' (removal strategy, central run), "
+                             "write one output folder per threshold (requires --add_suffix); see --threshold_scan")
+    parser.add_argument("-S", "--strong_threshold", dest="strong_threshold", nargs='+', default=['0.01'],
+                        help="Strong threshold(s); several values write one output folder per pair")
     parser.add_argument("-N", "--normalise_mutations", dest="normalise_mutations", action="store_true")
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true")
     parser.add_argument("-n", "--number", dest="number_of_samples", default=-1, type=int)
@@ -1089,25 +1276,70 @@ if __name__ == '__main__':
                        help="Floating-point precision for the cuML GPU backend: 'mixed' "
                             "(default) solves in fp32 and scores in fp64; 'fp32'/'fp64' use "
                             "one dtype throughout. Ignored unless --use_gpu is set.")
+    parser.add_argument("--threshold_scan", dest="threshold_scan", default='trajectory',
+                       choices=['trajectory', 'separate'],
+                       help="With several weak thresholds and the removal strategy: 'trajectory' "
+                            "(default) runs the greedy removal once per sample to full depth and replays "
+                            "it at each threshold (identical results); 'separate' runs it per threshold.")
+    parser.add_argument("--auto_thresholds", dest="auto_thresholds", default=12, type=int,
+                       help="Number of non-zero weak thresholds chosen by -W auto (plus 0).")
+    parser.add_argument("--thresholds_dir", dest="thresholds_dir", default=None,
+                       help="Write the threshold labels used in output names to "
+                            "<dir>/weak_thresholds.txt and <dir>/strong_thresholds.txt.")
+    parser.add_argument("--resolve_thresholds_only", dest="resolve_thresholds_only", action="store_true",
+                       help="Only resolve the thresholds (-W auto: from the trajectories of the loaded "
+                            "samples, see -n) and write them to --thresholds_dir; no attribution output.")
 
     args = parser.parse_args()
+
+    try:
+        weak_thresholds = parse_thresholds(args.weak_threshold, allow_auto=True)
+        strong_thresholds = parse_thresholds(args.strong_threshold)
+    except ValueError as e:
+        parser.error(str(e))
+    auto = weak_thresholds == 'auto'
+    multi = args.optimise_signatures and (auto or len(weak_thresholds) > 1 or len(strong_thresholds) > 1)
+    if args.resolve_thresholds_only and not args.thresholds_dir:
+        parser.error("--resolve_thresholds_only requires --thresholds_dir")
+    if auto and not (args.optimise_signatures and args.optimisation_strategy == 'removal'):
+        parser.error("-W auto requires -x with the removal optimisation strategy")
+    if auto and (args.bootstrap or args.n_bootstrap > 0):
+        parser.error("-W auto is not available for bootstrap runs: every iteration must use the same "
+                     "thresholds (resolve them first with --resolve_thresholds_only)")
+    if multi and not args.add_suffix and not args.resolve_thresholds_only:
+        parser.error("several thresholds (or -W auto) require --add_suffix (one output folder per threshold)")
+    if args.resolve_thresholds_only and not auto:
+        write_threshold_labels(args.thresholds_dir, weak_thresholds, strong_thresholds)
+        sys.exit(0)
+    if not auto:
+        # single-threshold runs keep a scalar threshold in args, exactly as before
+        args.weak_threshold, args.strong_threshold = weak_thresholds[0], strong_thresholds[0]
 
     # Setup paths
     dataset_name = args.dataset_name
     mutation_type = args.mutation_type
     context = args.context
-    output_path = f"{args.output_path}/{dataset_name}"
 
-    if args.add_suffix:
-        output_path += f'_{context}_NNLS'
-        if args.optimise_signatures:
-            weak_str = format_threshold(args.weak_threshold)
-            strong_str = format_threshold(args.strong_threshold)
-            output_path += f'_{weak_str}_{strong_str}'
-        else:
-            output_path += '_unoptimised'
+    def output_dir(weak, strong):
+        """Output folder of a (weak, strong) threshold pair."""
+        path = f"{args.output_path}/{dataset_name}"
+        if args.add_suffix:
+            path += f'_{context}_NNLS'
+            if args.optimise_signatures:
+                path += f'_{format_threshold(weak)}_{format_threshold(strong)}'
+            else:
+                path += '_unoptimised'
+        return path
 
-    make_folder_if_not_exists(output_path)
+    def bootstrap_suffix(weak, strong):
+        if multi:  # names downstream expect: <weak label>_<strong label>
+            return f'_{format_threshold(weak)}_{format_threshold(strong)}'
+        return f'_{args.bootstrap_output_suffix}' if args.bootstrap_output_suffix else ''
+
+    if not auto and not args.resolve_thresholds_only:
+        for weak in weak_thresholds:
+            for strong in strong_thresholds:
+                make_folder_if_not_exists(output_dir(weak, strong))
 
     # Validate mutation type
     if not mutation_type:
@@ -1158,7 +1390,8 @@ if __name__ == '__main__':
     if mutation_type == 'SBS':
         print(f"SBS context: {context}")
     if args.optimise_signatures:
-        print(f"Optimised NNLS: weak/strong thresholds = {args.weak_threshold}/{args.strong_threshold}")
+        print(f"Optimised NNLS: weak thresholds = {weak_thresholds}, strong thresholds = {strong_thresholds}"
+              + (f" ({args.threshold_scan} scan)" if multi else ""))
     if args.bootstrap:
         print(f"Bootstrap method: {args.bootstrap_method}")
 
@@ -1179,7 +1412,8 @@ if __name__ == '__main__':
         # numba JIT compilation and CSV loading are paid once instead of once per
         # iteration. This also keeps a single (future) GPU context alive across all
         # iterations rather than recreating one per Nextflow task. Each iteration
-        # resamples the base table afresh and writes its own indexed output set.
+        # resamples the base table afresh and writes its own indexed output set,
+        # for every threshold pair.
         method = args.bootstrap_method
 
         # Limit samples once; resample the same base table each iteration.
@@ -1195,9 +1429,9 @@ if __name__ == '__main__':
                 f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_fitted_values.csv',
                 index_col=[0, 1, 2])
 
-        bootstrap_dir = f'{output_path}/bootstrap_output'
-        make_folder_if_not_exists(bootstrap_dir)
-        suffix = f'_{args.bootstrap_output_suffix}' if args.bootstrap_output_suffix else ''
+        for weak in weak_thresholds:
+            for strong in strong_thresholds:
+                make_folder_if_not_exists(f'{output_dir(weak, strong)}/bootstrap_output')
 
         start_index = args.bootstrap_start_index
         end_index = start_index + args.n_bootstrap - 1
@@ -1220,13 +1454,14 @@ if __name__ == '__main__':
                 resampled = bootstrap_mutation_table(input_mutations, method=method)
             resampled = resampled.reindex(signatures.index)
 
-            b_weights, b_mutations, b_stat_info, _, _ = \
-                process_samples_batch(resampled, signatures, sel_sig_nums, args)
-
-            prefix = f'{bootstrap_dir}/output_{dataset_name}_{mutation_type}{suffix}_{i}'
-            b_weights.to_csv(f'{prefix}_weights_table.csv')
-            b_mutations.to_csv(f'{prefix}_mutations_table.csv')
-            b_stat_info.to_csv(f'{prefix}_stat_info.csv')
+            results, _ = attribute_at_thresholds(resampled, signatures, sel_sig_nums, args,
+                                                 weak_thresholds, strong_thresholds)
+            for (weak, strong), (b_weights, b_mutations, b_stat_info, _, _) in results.items():
+                prefix = (f'{output_dir(weak, strong)}/bootstrap_output/'
+                          f'output_{dataset_name}_{mutation_type}{bootstrap_suffix(weak, strong)}_{i}')
+                b_weights.to_csv(f'{prefix}_weights_table.csv')
+                b_mutations.to_csv(f'{prefix}_mutations_table.csv')
+                b_stat_info.to_csv(f'{prefix}_stat_info.csv')
         elapsed = time.process_time() - start_time
         print(f"{args.n_bootstrap} bootstrap iterations took {elapsed:.2f}s "
               f"({elapsed/args.n_bootstrap:.3f}s per iteration)")
@@ -1260,8 +1495,21 @@ if __name__ == '__main__':
         # Process samples
         start_time = time.process_time()
 
-        output_weights, output_mutations, output_stat_info, residuals_df, fitted_df = \
-            process_samples_batch(input_mutations, signatures, sel_sig_nums, args)
+        trajectories = None
+        if auto:
+            # choose the weak thresholds from this data's removal trajectories, then reuse them
+            trajectories = removal_trajectories(input_mutations, signatures, sel_sig_nums, args)
+            weak_thresholds = auto_weak_thresholds([t for _, t in trajectories.values()], args.auto_thresholds)
+            print(f"Automatic weak thresholds ({len(trajectories)} samples): "
+                  f"{[format_threshold(w) for w in weak_thresholds]}")
+            if args.resolve_thresholds_only:
+                write_threshold_labels(args.thresholds_dir, weak_thresholds, strong_thresholds)
+                sys.exit(0)
+        if multi and args.thresholds_dir:
+            write_threshold_labels(args.thresholds_dir, weak_thresholds, strong_thresholds)
+
+        results, _ = attribute_at_thresholds(input_mutations, signatures, sel_sig_nums, args,
+                                             weak_thresholds, strong_thresholds, trajectories)
 
         end_time = time.process_time()
         elapsed = end_time - start_time
@@ -1269,17 +1517,21 @@ if __name__ == '__main__':
         print(f"Attribution took {elapsed:.2f}s ({elapsed/n_samples:.2f}s per sample)")
 
         # Save outputs
-        output_weights.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_weights_table.csv')
-        output_mutations.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_mutations_table.csv')
-        output_stat_info.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_stat_info.csv')
-        residuals_df.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_residuals.csv')
-        fitted_df.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_fitted_values.csv')
+        for (weak, strong), outputs in results.items():
+            output_path = output_dir(weak, strong)
+            make_folder_if_not_exists(output_path)
+            output_weights, output_mutations, output_stat_info, residuals_df, fitted_df = outputs
+            output_weights.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_weights_table.csv')
+            output_mutations.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_mutations_table.csv')
+            output_stat_info.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_stat_info.csv')
+            residuals_df.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_residuals.csv')
+            fitted_df.to_csv(f'{output_path}/output_{dataset_name}_{mutation_type}_fitted_values.csv')
 
-        if not args.bootstrap:
-            residuals_df.to_csv(f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_residuals.csv')
-            fitted_df.to_csv(f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_fitted_values.csv')
+            if not args.bootstrap:
+                residuals_df.to_csv(f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_residuals.csv')
+                fitted_df.to_csv(f'{inp_path}/{dataset_name}/output_{dataset_name}_{mutation_type}_fitted_values.csv')
 
-        if _GPU_SOLVER is not None:
-            # Record the GPU environment next to the attribution it produced
-            with open(f'{output_path}/gpu_provenance.json', 'w') as f:
-                json.dump(_GPU_SOLVER.provenance(), f, indent=2, default=str)
+            if _GPU_SOLVER is not None:
+                # Record the GPU environment next to the attribution it produced
+                with open(f'{output_path}/gpu_provenance.json', 'w') as f:
+                    json.dump(_GPU_SOLVER.provenance(), f, indent=2, default=str)

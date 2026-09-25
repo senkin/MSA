@@ -87,6 +87,14 @@ if (params.mutation_types instanceof String) {
     mutation_types = params.mutation_types
 }
 
+// Validate the threshold scan settings
+if (params.weak_thresholds.toString().trim() == 'auto' && params.optimisation_strategy != 'removal') {
+    error "ERROR: weak_thresholds = 'auto' needs optimisation_strategy = 'removal' (got '${params.optimisation_strategy}'). Give an explicit list, e.g. --weak_thresholds 0,0.0001,0.0002,0.0003"
+}
+if (!(params.threshold_scan in ['trajectory', 'separate'])) {
+    error "ERROR: threshold_scan must be 'trajectory' or 'separate' (got '${params.threshold_scan}')"
+}
+
 // Validate parameters when using specific file inputs
 if (params.input_mutation_table || params.signatures_file) {
     if (params.input_mutation_table) {
@@ -123,6 +131,7 @@ include { convert_data_workflow } from './modules/data_conversion'
 include { NNLS_unoptimized_workflow as UnoptimizedNNLS } from './modules/nnls'
 include { NNLS_optimized_workflow as OptimizedNNLS } from './modules/nnls'
 include { NNLS_bootstrap_workflow as OptimizedNNLSforBootstrap } from './modules/nnls'
+include { WEAK_THRESHOLDS_workflow } from './modules/nnls'
 include { FINAL_NNLS_workflow } from './modules/nnls'
 include { FINAL_NNLS_BOOTSTRAP_workflow } from './modules/nnls'
 include { simulate_data_workflow } from './modules/simulations'
@@ -273,48 +282,44 @@ workflow {
             run_seed
         )
         
-        def optimized_outputs = []
-        def bootstrap_outputs = []
-        // Run optimized NNLS for each threshold combination
-        for (weak_threshold in params.weak_thresholds) {
-            for (strong_threshold in params.strong_thresholds) {
-                // Standard optimized NNLS
-                OptimizedNNLS(
-                    params.dataset,
-                    mutation_type,
-                    simulate_data_workflow.out.all_simulation_outputs,
-                    signature_files_channel,
-                    weak_threshold,
-                    strong_threshold
-                )
-                optimized_outputs.add(OptimizedNNLS.out.dataset_mutation_pairs)
-                
-                // Optimized NNLS with bootstrap
-                OptimizedNNLSforBootstrap(
-                    params.dataset,
-                    mutation_type,
-                    simulate_data_workflow.out.all_simulation_outputs,
-                    signature_files_channel,
-                    weak_threshold,
-                    strong_threshold,
-                    params.number_of_bootstrapped_samples_in_optimisation,
-                    run_seed
-                )
-                bootstrap_outputs.add(OptimizedNNLSforBootstrap.out.bootstrap_done)
-            }
-        }
+        // Thresholds to scan: 'auto' (from removal trajectories on the simulated data) or
+        // the configured list, resolved into the labels every later step uses
+        WEAK_THRESHOLDS_workflow(
+            params.dataset,
+            mutation_type,
+            simulate_data_workflow.out.all_simulation_outputs,
+            signature_files_channel
+        )
 
-        // Wait for ALL processes to complete
-        all_optimized = Channel.empty().mix(*optimized_outputs).collect()
-        all_bootstrap = Channel.empty().mix(*bootstrap_outputs).collect()
-        
+        // Optimized NNLS on the simulated data: one job for all threshold pairs
+        OptimizedNNLS(
+            params.dataset,
+            mutation_type,
+            simulate_data_workflow.out.all_simulation_outputs,
+            signature_files_channel,
+            WEAK_THRESHOLDS_workflow.out.weak_file,
+            WEAK_THRESHOLDS_workflow.out.strong_file
+        )
+
+        // Optimized NNLS with bootstrap: each chunk of iterations covers all threshold pairs
+        OptimizedNNLSforBootstrap(
+            params.dataset,
+            mutation_type,
+            simulate_data_workflow.out.all_simulation_outputs,
+            signature_files_channel,
+            WEAK_THRESHOLDS_workflow.out.weak_file,
+            WEAK_THRESHOLDS_workflow.out.strong_file,
+            params.number_of_bootstrapped_samples_in_optimisation,
+            run_seed
+        )
+
         // Generate bootstrap tables after ALL optimized runs complete
         // Wait for both OptimizedNNLS and OptimizedNNLSforBootstrap to finish
         BOOTSTRAP_TABLES_workflow(
             UnoptimizedNNLS.out.dataset_mutation_pairs,
-            all_optimized.mix(all_bootstrap).collect(),
-            params.weak_thresholds,
-            params.strong_thresholds,
+            OptimizedNNLS.out.dataset_mutation_pairs.collect().mix(OptimizedNNLSforBootstrap.out.bootstrap_done.collect()).collect(),
+            WEAK_THRESHOLDS_workflow.out.weak_labels,
+            WEAK_THRESHOLDS_workflow.out.strong_labels,
             params.number_of_bootstrapped_samples_in_optimisation
         )
         
@@ -322,15 +327,15 @@ workflow {
         OPTIMAL_PENALTIES_workflow(
             BOOTSTRAP_TABLES_workflow.out.bootstrap_tables,
             UnoptimizedNNLS.out.dataset_mutation_pairs,
-            params.weak_thresholds,
-            params.strong_thresholds
+            WEAK_THRESHOLDS_workflow.out.weak_labels,
+            WEAK_THRESHOLDS_workflow.out.strong_labels
         )
         
         // Generate optimization plots
         OPTIMISATION_PLOTS_workflow(
             OPTIMAL_PENALTIES_workflow.out.penalties_for_optimisation_plotting,
-            params.weak_thresholds,
-            params.strong_thresholds
+            WEAK_THRESHOLDS_workflow.out.weak_labels,
+            WEAK_THRESHOLDS_workflow.out.strong_labels
         )
         
         // Run final NNLS with optimal penalties

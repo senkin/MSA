@@ -383,6 +383,10 @@ if __name__ == '__main__':
     optimal_penalties.at['average', 'optimal_strong_penalty'] = average_optimal_strong_penalty
     optimal_penalties.at['selected', 'optimal_weak_penalty'] = optimal_weak_penalty
     optimal_penalties.at['selected', 'optimal_strong_penalty'] = optimal_strong_penalty
+    if len(weak_thresholds) > 1 and optimal_weak_penalty == max(weak_thresholds):
+        warnings.warn('Selected weak penalty %s is the largest threshold scanned: the optimum may lie above '
+                      'the scanned range. Consider extending weak_thresholds (or weak_thresholds = \'auto\').'
+                      % optimal_weak_penalty)
     weak_penalty_file.write("%s\n" % optimal_weak_penalty)
     strong_penalty_file.write("%s\n" % optimal_strong_penalty)
 

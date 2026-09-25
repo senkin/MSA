@@ -3,8 +3,8 @@
 workflow OPTIMISATION_PLOTS_workflow {
     take:
     penalties_for_plotting  // tuple of (dataset, mutation_type) from optimal penalties
-    weak_thresholds         // list of weak thresholds
-    strong_thresholds       // list of strong thresholds
+    weak_thresholds         // channel: list of weak threshold labels
+    strong_thresholds       // channel: list of strong threshold labels
     
     main:
     // Process to plot optimisation plots
@@ -43,8 +43,8 @@ workflow OPTIMISATION_PLOTS_workflow {
     // Run plotting for each dataset/mutation_type combination
     plot_optimisation_plots(
         penalties_for_plotting,
-        Channel.value(weak_thresholds),
-        Channel.value(strong_thresholds)
+        weak_thresholds,
+        strong_thresholds
     )
     
     emit:

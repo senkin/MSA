@@ -4,8 +4,8 @@ workflow OPTIMAL_PENALTIES_workflow {
     take:
     bootstrap_tables        // all bootstrap tables from previous step
     dataset_mutation_pairs  // tuple of (dataset, mutation_type)
-    weak_thresholds         // list of weak thresholds
-    strong_thresholds       // list of strong thresholds
+    weak_thresholds         // channel: list of weak threshold labels
+    strong_thresholds       // channel: list of strong threshold labels
     
     main:
     // Process to calculate optimal penalties
@@ -64,8 +64,8 @@ workflow OPTIMAL_PENALTIES_workflow {
     calculate_optimal_penalties(
         all_bootstrap_tables,
         dataset_mutation_pairs,  // This is already the specific pair for this mutation type
-        Channel.value(weak_thresholds),
-        Channel.value(strong_thresholds)
+        weak_thresholds,
+        strong_thresholds
     )
     
     emit:

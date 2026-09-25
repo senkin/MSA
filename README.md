@@ -99,6 +99,10 @@ The pipeline processes inputs in the following priority order:
 | --COSMIC_signatures | false | If true, use COSMIC signatures from SigProfiler output; otherwise use de-novo |
 | --seed | null | RNG seed for the simulations and bootstrap resampling. If unset, a seed is derived from the Nextflow session ID; the seed used is always recorded in `pipeline_info/` (see [Reproducibility](#reproducibility)) |
 | --bootstrap_chunk_size | 0 | Bootstrap iterations per job. 0: one per job on CPU, all in one job on GPU. Results do not depend on it |
+| --weak_thresholds | auto | Weak penalties scanned in the optimisation: `auto`, or an explicit list (config list, or comma-separated on the command line, e.g. `0,0.0001,0.0002,0.0003`). See [Penalty scan](#penalty-scan) |
+| --auto_weak_thresholds_number | 12 | Number of non-zero penalties chosen by `auto` (0 is always included) |
+| --auto_weak_thresholds_samples | 300 | Simulated samples whose removal trajectories choose the `auto` penalties (-1: all) |
+| --threshold_scan | trajectory | `trajectory`: one greedy removal per sample, replayed at every penalty (identical results); `separate`: one removal per penalty, as before |
 <!-- | --signatures_to_prioritise | null | set a list of signatures to prioritise in penalty calculation (only these will be used to calculate optimal penalty) |
 | --signatures_to_deprioritise | null | set a list of signatures to deprioritise (these will be excluded in penalty calculation) |
 | --no_CI_for_penalties | false | do not use confidence intervals for optimal penalties calculation | -->
@@ -177,9 +181,42 @@ Then run with a conda-enabled profile:
 nextflow run run_auto_optimised_analysis.nf -profile conda,test_GPU -c gpu.config
 ```
 
+The penalty scan replays one batched removal trajectory per sample on the GPU as well; the
+acceptance check above also verifies that this gives exactly the results of one run per penalty
+on your GPU (`--threshold_scan separate` is the fallback).
+
 By default each GPU bootstrap runs as a single job. To spread it over several GPUs, set
 `--bootstrap_chunk_size` (e.g. `250` runs 1000 iterations as 4 GPU jobs; `test_GPU` does this).
 Iteration `i` is always seeded from `(seed, i)`, so the split does not change the results.
+
+## Penalty scan
+
+The optimisation attributes the simulated data at a range of weak penalties (`weak_thresholds`)
+and picks the one that best meets the chosen metric (`metric_to_prioritise`, `metric_threshold`).
+
+* **One pass for all penalties.** In the greedy removal (default `optimisation_strategy = "removal"`)
+  the penalty only decides when to stop; which signature is removed at each step does not depend
+  on it. So the removal is run once per sample down to a single signature, recording the similarity
+  drop at each step, and replayed at every penalty. Results are identical to one run per penalty
+  (on CPU and in the batched GPU path), and one job covers all penalties, so scanning many penalties
+  costs little extra computation. `--threshold_scan separate` restores one run per penalty.
+* **Automatic range (`weak_thresholds = 'auto'`, default).** A sample's attributed signatures only
+  change at the running maxima of its recorded similarity drops. Before the scan, these are
+  collected from the trajectories of `auto_weak_thresholds_samples` simulated samples, and the
+  penalties are 0 plus `auto_weak_thresholds_number` values log-spaced between their 5th and 95th
+  percentiles (values below 1e-6, numerical noise, are ignored). The range therefore adapts to the
+  cohort and signature set instead of a fixed `[0, 0.0001, 0.0002, 0.0003]`, which can be far below
+  the optimum for some cohorts.
+* **Explicit ranges** work as before, e.g. `weak_thresholds = [0, 0.0001, 0.0002, 0.0003]` in the
+  config or `--weak_thresholds 0,0.0001,0.0002,0.0003`, and give the same results as before.
+  `auto` requires the removal strategy; other strategies need an explicit list.
+
+The penalties used are in `outputs_optimisation/SIM_<dataset>/<mutation type>/weak_thresholds.txt`.
+Each penalty still adds its own bootstrap output files and summary-table job, so very long lists
+increase disk usage and post-processing time. The per-penalty post-processing (final fit, metrics,
+output files) runs on the CPU host even in GPU mode, so on a GPU it, rather than the NNLS, dominates
+the optimisation jobs; set `bootstrap_chunk_size` to spread the optimisation bootstrap over several
+jobs. If the selected penalty is the largest one scanned, a warning suggests extending the range.
 
 ## Reproducibility
 

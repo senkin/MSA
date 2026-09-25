@@ -14,6 +14,68 @@ def bootstrap_chunks(n, chunk_size) {
     return (1..n).step(size).collect { start -> [start, Math.min(size, (n as int) - start + 1)] }
 }
 
+// Threshold list for run_NNLS.py -W/-S: 'auto', a list from the config, a single number,
+// or a comma/space separated string from the command line (e.g. --weak_thresholds 0,0.001)
+def threshold_args(value) {
+    return value instanceof Collection ? value.join(' ') : value.toString().replace(',', ' ')
+}
+
+// Simulated truth (weights) table of SIM_<dataset> for a mutation type
+def simulated_truth_file(dataset, mutation_type) {
+    def table = [SBS: "${params.SBS_context}", DBS: 'dinucs', ID: 'indels'].get(mutation_type, mutation_type)
+    return "${params.output_path}/temp/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.${table}.weights.csv"
+}
+
+// Resolve the weak/strong thresholds scanned in the optimisation into the labels used in
+// output names (written by run_NNLS.py, so every step names folders the same way).
+// weak_thresholds = 'auto' picks them from removal trajectories of a subsample of the
+// simulated data; an explicit list is only formatted.
+workflow WEAK_THRESHOLDS_workflow {
+    take:
+    dataset
+    mutation_type
+    input_files
+    signature_files
+
+    main:
+    process resolve_thresholds {
+        tag "${mutation_type}/${dataset}"
+        publishDir "${params.output_path}/outputs_optimisation/SIM_${dataset}/${mutation_type}", mode: 'copy', overwrite: true
+
+        input:
+        val dataset
+        val mutation_type
+        path input_files
+        path signature_files
+
+        output:
+        path 'weak_thresholds.txt', emit: weak
+        path 'strong_thresholds.txt', emit: strong
+
+        when:
+        !params.run_only_simulations
+
+        script:
+        def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
+        """
+        python ${workflow.projectDir}/bin/run_NNLS.py -d SIM_${dataset} -t ${mutation_type} -c ${params.SBS_context} \
+            -p ${signature_prefix} -x --optimisation_strategy ${params.optimisation_strategy} \
+            -W ${threshold_args(params.weak_thresholds)} -S ${threshold_args(params.strong_thresholds)} \
+            --auto_thresholds ${params.auto_weak_thresholds_number} -n ${params.auto_weak_thresholds_samples} \
+            -i ${params.output_path}/temp/output_tables -s ${params.output_path}/temp/signature_tables \
+            -o "./" --resolve_thresholds_only --thresholds_dir ./
+        """
+    }
+
+    resolve_thresholds(dataset, mutation_type, input_files, signature_files)
+
+    emit:
+    weak_file = resolve_thresholds.out.weak
+    strong_file = resolve_thresholds.out.strong
+    weak_labels = resolve_thresholds.out.weak.map { f -> f.readLines()*.trim().findAll { it } }
+    strong_labels = resolve_thresholds.out.strong.map { f -> f.readLines()*.trim().findAll { it } }
+}
+
 // Unoptimized NNLS workflow
 workflow NNLS_unoptimized_workflow {
     take:
@@ -70,20 +132,20 @@ workflow NNLS_unoptimized_workflow {
     residuals = run_unoptimized_NNLS.out.residuals
 }
 
-// Optimized NNLS workflow (single run per threshold combination)
+// Optimized NNLS workflow: one job covers all threshold pairs (one output folder each)
 workflow NNLS_optimized_workflow {
     take:
     dataset
     mutation_type
     input_files
     signature_files
-    weak_threshold
-    strong_threshold
+    weak_thresholds_file    // labels from WEAK_THRESHOLDS_workflow
+    strong_thresholds_file
     
     main:
     // Optimized NNLS process
     process run_optimized_NNLS {
-        tag "${mutation_type}/${dataset}/${weak_threshold}/${strong_threshold}"
+        tag "${mutation_type}/${dataset}"
         label 'gpu_nnls'
         publishDir "${params.output_path}/outputs_optimisation", mode: 'copy', overwrite: true
         
@@ -92,8 +154,8 @@ workflow NNLS_optimized_workflow {
         val mutation_type
         path input_files
         path signature_files
-        val weak_threshold
-        val strong_threshold
+        path weak_thresholds_file
+        path strong_thresholds_file
         
         output:
         path "SIM_${dataset}_${params.SBS_context}_NNLS_*/output_SIM_${dataset}_${mutation_type}_mutations_table.csv", emit: mutations_table
@@ -109,28 +171,19 @@ workflow NNLS_optimized_workflow {
         script:
         def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
         """
-        # Create output directory
-        mkdir -p ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}
+        # Copy the simulated truth table into every threshold pair's output directory
+        for weak in \$(cat ${weak_thresholds_file}); do
+            for strong in \$(cat ${strong_thresholds_file}); do
+                mkdir -p ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_\${weak}_\${strong}
+                cp ${simulated_truth_file(dataset, mutation_type)} \\
+                   ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_\${weak}_\${strong}/
+            done
+        done
         
-        # Copy the appropriate simulated dataset based on mutation type
-        if [[ ${mutation_type} == "SBS" ]]; then
-            cp ${params.output_path}/temp/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.${params.SBS_context}.weights.csv \\
-               ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
-        elif [[ ${mutation_type} == "DBS" ]]; then
-            cp ${params.output_path}/temp/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.dinucs.weights.csv \\
-               ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
-        elif [[ ${mutation_type} == "ID" ]]; then
-            cp ${params.output_path}/temp/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.indels.weights.csv \\
-               ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
-        elif [[ ${mutation_type} == "SV" || ${mutation_type} == "CNV" ]]; then
-            cp ${params.output_path}/temp/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.${mutation_type}.weights.csv \\
-               ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
-        fi
-        
-        # Run NNLS analysis
+        # Run NNLS analysis for all threshold pairs
         python ${workflow.projectDir}/bin/run_NNLS.py -d SIM_${dataset} -t ${mutation_type} -c ${params.SBS_context} \\
             -p ${signature_prefix} --optimisation_strategy ${params.optimisation_strategy} \\
-            -W ${weak_threshold} -S ${strong_threshold} \\
+            -W \$(cat ${weak_thresholds_file}) -S \$(cat ${strong_thresholds_file}) --threshold_scan ${params.threshold_scan} \\
             -i ${params.output_path}/temp/output_tables -s ${params.output_path}/temp/signature_tables \\
             -o "./" -x --add_suffix ${gpu_flag}
         """
@@ -142,8 +195,8 @@ workflow NNLS_optimized_workflow {
         mutation_type,
         input_files,
         signature_files,
-        weak_threshold,
-        strong_threshold
+        weak_thresholds_file,
+        strong_thresholds_file
     )
     
     emit:
@@ -162,18 +215,19 @@ workflow NNLS_bootstrap_workflow {
     mutation_type
     input_files
     signature_files
-    weak_threshold
-    strong_threshold
+    weak_thresholds_file    // labels from WEAK_THRESHOLDS_workflow
+    strong_thresholds_file
     num_bootstrap_samples
     seed                    // run-wide RNG seed (resolved in the main script)
     
     main:
     // Bootstrap NNLS process. Each task runs one chunk of bootstrap iterations
-    // in-process via run_NNLS.py --n_bootstrap, writing one indexed output set per
-    // iteration (indices start_index .. start_index + n_per_task - 1) directly into
-    // the bootstrap_output/ folder. Chunks come from bootstrap_chunks() (see below).
+    // in-process via run_NNLS.py --n_bootstrap, for all threshold pairs, writing one
+    // indexed output set per iteration and pair (indices start_index .. start_index +
+    // n_per_task - 1) into each pair's bootstrap_output/ folder. Chunks come from
+    // bootstrap_chunks() (see below).
     process run_bootstrap_NNLS {
-        tag "${mutation_type}/${dataset}/${weak_threshold}/${strong_threshold}/${chunk[0]}"
+        tag "${mutation_type}/${dataset}/${chunk[0]}"
         label 'gpu_nnls'
         publishDir "${params.output_path}/outputs_optimisation"
 
@@ -182,15 +236,15 @@ workflow NNLS_bootstrap_workflow {
         val mutation_type
         path input_files
         path signature_files
-        val weak_threshold
-        val strong_threshold
+        path weak_thresholds_file
+        path strong_thresholds_file
         each chunk              // [start_index, n_per_task]
         val seed
 
         output:
-        path "SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output/output_SIM_${dataset}_${mutation_type}_${weak_threshold}_${strong_threshold}_*_mutations_table.csv", emit: mutations_tables
-        path "SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output/output_SIM_${dataset}_${mutation_type}_${weak_threshold}_${strong_threshold}_*_weights_table.csv", emit: weights_tables
-        path "SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/bootstrap_output/output_SIM_${dataset}_${mutation_type}_${weak_threshold}_${strong_threshold}_*_stat_info.csv", emit: stat_infos
+        path "SIM_${dataset}_${params.SBS_context}_NNLS_*/bootstrap_output/output_SIM_${dataset}_${mutation_type}_*_mutations_table.csv", emit: mutations_tables
+        path "SIM_${dataset}_${params.SBS_context}_NNLS_*/bootstrap_output/output_SIM_${dataset}_${mutation_type}_*_weights_table.csv", emit: weights_tables
+        path "SIM_${dataset}_${params.SBS_context}_NNLS_*/bootstrap_output/output_SIM_${dataset}_${mutation_type}_*_stat_info.csv", emit: stat_infos
 
         when:
         !params.run_only_simulations
@@ -199,33 +253,25 @@ workflow NNLS_bootstrap_workflow {
         def (start_index, n_per_task) = chunk
         def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
         """
-        # Create output directory
-        mkdir -p ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}
+        # Copy the simulated truth table into every threshold pair's output directory
+        for weak in \$(cat ${weak_thresholds_file}); do
+            for strong in \$(cat ${strong_thresholds_file}); do
+                mkdir -p ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_\${weak}_\${strong}
+                cp ${simulated_truth_file(dataset, mutation_type)} \\
+                   ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_\${weak}_\${strong}/
+            done
+        done
 
-        # Copy the appropriate simulated dataset (truth weights) based on mutation type
-        if [[ ${mutation_type} == "SBS" ]]; then
-            cp ${params.output_path}/temp/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.${params.SBS_context}.weights.csv \\
-               ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
-        elif [[ ${mutation_type} == "DBS" ]]; then
-            cp ${params.output_path}/temp/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.dinucs.weights.csv \\
-               ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
-        elif [[ ${mutation_type} == "ID" ]]; then
-            cp ${params.output_path}/temp/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.indels.weights.csv \\
-               ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
-        elif [[ ${mutation_type} == "SV" || ${mutation_type} == "CNV" ]]; then
-            cp ${params.output_path}/temp/output_tables/SIM_${dataset}/WGS_SIM_${dataset}.${mutation_type}.weights.csv \\
-               ${params.output_path}/outputs_optimisation/SIM_${dataset}_${params.SBS_context}_NNLS_${weak_threshold}_${strong_threshold}/
-        fi
-
-        # Run this task's slice of bootstrap iterations in-process. run_NNLS.py writes
-        # one indexed output set per iteration directly into the bootstrap_output/ folder.
+        # Run this task's slice of bootstrap iterations in-process, for all threshold pairs.
+        # run_NNLS.py writes one indexed output set per iteration and pair into
+        # SIM_<dataset>_<context>_NNLS_<weak>_<strong>/bootstrap_output/.
         python ${workflow.projectDir}/bin/run_NNLS.py -B --n_bootstrap ${n_per_task} --bootstrap_start_index ${start_index} \\
-            --bootstrap_output_suffix ${weak_threshold}_${strong_threshold} \\
             -d SIM_${dataset} -t ${mutation_type} -c ${params.SBS_context} -x \\
             --optimisation_strategy ${params.optimisation_strategy} \\
             --bootstrap_method ${params.bootstrap_method} \\
-            -W ${weak_threshold} -S ${strong_threshold} --add_suffix \\
-            -p ${signature_prefix} -i ${params.output_path}/temp/output_tables -s ${params.output_path}/temp/signature_tables -o "./" ${gpu_flag} --seed ${seed}
+            -W \$(cat ${weak_thresholds_file}) -S \$(cat ${strong_thresholds_file}) --threshold_scan ${params.threshold_scan} \\
+            --add_suffix -p ${signature_prefix} -i ${params.output_path}/temp/output_tables \\
+            -s ${params.output_path}/temp/signature_tables -o "./" ${gpu_flag} --seed ${seed}
         """
     }
 
@@ -234,8 +280,8 @@ workflow NNLS_bootstrap_workflow {
         mutation_type,
         input_files,
         signature_files,
-        weak_threshold,
-        strong_threshold,
+        weak_thresholds_file,
+        strong_thresholds_file,
         bootstrap_chunks(num_bootstrap_samples, params.bootstrap_chunk_size),
         seed
     )

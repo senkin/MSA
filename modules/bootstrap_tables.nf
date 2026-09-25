@@ -4,8 +4,8 @@ workflow BOOTSTRAP_TABLES_workflow {
     take:
     dataset_mutation_pairs  // tuple of (dataset, mutation_type)
     bootstrap_outputs       // all bootstrap outputs from previous step
-    weak_thresholds         // list of weak thresholds
-    strong_thresholds       // list of strong thresholds
+    weak_thresholds         // channel: list of weak threshold labels
+    strong_thresholds       // channel: list of strong threshold labels
     num_bootstrap_samples   // number of bootstrap samples
     
     main:
@@ -47,8 +47,8 @@ workflow BOOTSTRAP_TABLES_workflow {
     make_optimisation_bootstrap_tables(
         dataset_mutation_pairs,
         bootstrap_ready_signal,
-        Channel.from(weak_thresholds),    // each weak_threshold
-        Channel.from(strong_thresholds),   // each strong_threshold
+        weak_thresholds,    // each weak_threshold
+        strong_thresholds,  // each strong_threshold
         num_bootstrap_samples
     )
     

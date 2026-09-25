@@ -15,6 +15,10 @@
 #                                      on the GPU's memory size)
 #   GPU mixed       vs GPU fp64        <= --max-differing-fraction        yes (default precision)
 #   GPU fp32        vs GPU fp64        reported                           no
+#   GPU trajectory  vs one run per     identical (the default multi-      yes
+#   (all thresholds threshold          threshold scan replays one batched
+#   in one run)                        trajectory; requires per-problem
+#                                      results independent of batching)
 #
 # Samples whose greedy decision sits within rounding error of the threshold can flip
 # between precisions or solvers, hence a small allowed fraction rather than equality.
@@ -134,6 +138,25 @@ gpu_run gpu_fp64_batch4096 fp64 4096
 gpu_run gpu_mixed mixed 0
 gpu_run gpu_fp32 fp32 0
 
+# Multi-threshold scan (default precision): one run replaying the batched trajectory at
+# every threshold vs one run per threshold, same output folder layout (--add_suffix)
+SCAN=(0 "$THRESHOLD" 0.001 0.01)
+t0=$(date +%s)
+rm -rf "$WORKDIR/gpu_scan_trajectory" "$WORKDIR/gpu_scan_separate"
+GPU_MIXED=(--use_gpu --gpu_precision mixed --gpu_batch_size 0 --add_suffix -S 0)
+run scan_trajectory_central ${GPU_ENV[@]+"${GPU_ENV[@]}"} "$GPU_PYTHON" "$REPO/bin/run_NNLS.py" "${COMMON[@]}" \
+    "${GPU_MIXED[@]}" -W "${SCAN[@]}" -o "$WORKDIR/gpu_scan_trajectory"
+run scan_trajectory_bootstrap ${GPU_ENV[@]+"${GPU_ENV[@]}"} "$GPU_PYTHON" "$REPO/bin/run_NNLS.py" "${COMMON[@]}" \
+    "${BOOT[@]}" --n_bootstrap "$BOOTSTRAPS" "${GPU_MIXED[@]}" -W "${SCAN[@]}" -o "$WORKDIR/gpu_scan_trajectory"
+for w in "${SCAN[@]}"; do
+  run "scan_separate_central_$w" ${GPU_ENV[@]+"${GPU_ENV[@]}"} "$GPU_PYTHON" "$REPO/bin/run_NNLS.py" "${COMMON[@]}" \
+      "${GPU_MIXED[@]}" -W "$w" -o "$WORKDIR/gpu_scan_separate"
+  run "scan_separate_bootstrap_$w" ${GPU_ENV[@]+"${GPU_ENV[@]}"} "$GPU_PYTHON" "$REPO/bin/run_NNLS.py" "${COMMON[@]}" \
+      "${BOOT[@]}" --n_bootstrap "$BOOTSTRAPS" "${GPU_MIXED[@]}" -W "$w" -o "$WORKDIR/gpu_scan_separate" \
+      --bootstrap_output_suffix "$("$CPU_PYTHON" -c "import sys; sys.path.insert(0, '$REPO/bin'); from common_methods import format_threshold as f; print(f(float('$w')) + '_0')")"
+done
+echo "    threshold scan (trajectory + ${#SCAN[@]} separate runs): $(elapsed "$t0")"
+
 echo ">>> GPU environment (from gpu_fp64/$DATASET/gpu_provenance.json)"
 "$CPU_PYTHON" - "$WORKDIR/gpu_fp64/$DATASET/gpu_provenance.json" <<'PY'
 import json, sys
@@ -166,6 +189,7 @@ compare "GPU fp64 repeat vs GPU fp64 (determinism)" 1 gpu_fp64 gpu_fp64_repeat -
 compare "GPU fp64 batch 4096 vs auto batch (batch-size invariance)" 1 gpu_fp64 gpu_fp64_batch4096 --exact
 compare "GPU mixed vs GPU fp64 (default precision)" 1 gpu_fp64 gpu_mixed "${TOL[@]}"
 compare "GPU fp32 vs GPU fp64" 0 gpu_fp64 gpu_fp32 "${TOL[@]}"
+compare "GPU threshold scan: trajectory vs one run per threshold" 1 gpu_scan_separate gpu_scan_trajectory --exact
 
 echo
 echo "================ GPU acceptance summary ================"
