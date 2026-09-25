@@ -56,7 +56,8 @@ class OptimalPenaltyTest(unittest.TestCase):
 
     def test_fallback_when_specificity_is_never_reached(self):
         # best sensitivity among the penalties with the highest specificity
-        penalty = calculate_optimal_penalty(*self.tables([0.9, 0.8, 0.7, 0.6], [0.5, 0.6, 0.7, 0.7]))
+        with self.assertWarnsRegex(UserWarning, 'specificity never reaches 0.95'):
+            penalty = calculate_optimal_penalty(*self.tables([0.9, 0.8, 0.7, 0.6], [0.5, 0.6, 0.7, 0.7]))
         self.assertEqual(penalty, (0.01, 0))
 
     def test_prioritising_sensitivity(self):
@@ -66,7 +67,8 @@ class OptimalPenaltyTest(unittest.TestCase):
 
     def test_undefined_sensitivity_gives_no_penalty(self):
         # a signature never present in the truth has no sensitivity: no penalty from it
-        penalty = calculate_optimal_penalty(*self.tables([np.nan] * 4, [0.5, 0.96, 0.99, 1.0]))
+        with self.assertWarnsRegex(UserWarning, 'sensitivity table is full of NaN'):
+            penalty = calculate_optimal_penalty(*self.tables([np.nan] * 4, [0.5, 0.96, 0.99, 1.0]))
         self.assertTrue(all(np.isnan(p) for p in penalty))
 
 

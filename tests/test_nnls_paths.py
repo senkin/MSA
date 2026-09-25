@@ -52,8 +52,9 @@ class AttributionTest(unittest.TestCase):
         sigs, _ = load_inputs()
         true_weights = pd.Series({'SBS1': 0.2, 'SBS5': 0.5, 'SBS13': 0.3})
         observed = (sigs[true_weights.index] @ true_weights * 2000).values
-        weights, mutations, fitted, residuals, stat_info = R.perform_signature_attribution(
-            observed, sigs[true_weights.index])
+        with np.errstate(invalid='ignore'):  # exact fit: Jensen-Shannon takes sqrt of a rounding -0
+            weights, mutations, fitted, residuals, stat_info = R.perform_signature_attribution(
+                observed, sigs[true_weights.index])
         np.testing.assert_allclose(weights, true_weights.values, atol=1e-9)
         np.testing.assert_allclose(mutations, 2000 * true_weights.values, rtol=1e-9)
         np.testing.assert_allclose(fitted, observed, atol=1e-9)

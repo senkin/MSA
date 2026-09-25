@@ -113,8 +113,10 @@ class BatchedTrajectoryTest(unittest.TestCase):
         for w in self.THRESHOLDS:
             with self.subTest(weak_threshold=w, gpu_batch_size=gpu_batch_size):
                 args = gpu_args(w, gpu_batch_size)
-                expected = R.process_samples_batch(self.muts, self.sigs, self.sel, args)
-                actual = R.process_samples_batch(self.muts, self.sigs, self.sel, args, trajectories)
+                with self.assertWarnsRegex(UserWarning, 'Sample 2: Zero mutations'):
+                    expected = R.process_samples_batch(self.muts, self.sigs, self.sel, args)
+                with self.assertWarnsRegex(UserWarning, 'Sample 2: Zero mutations'):
+                    actual = R.process_samples_batch(self.muts, self.sigs, self.sel, args, trajectories)
                 for exp, act in zip(expected, actual):
                     self.assertTrue(np.array_equal(exp.values, act.values, equal_nan=True))
 

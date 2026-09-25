@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 from unittest import mock
 
@@ -52,6 +53,15 @@ def load(mutation_type, context, suffix, index_col, prefix):
     return mutations, signatures
 
 
+def ignore_empty_sample_warnings(test):
+    """For the rest of the test, silence the warning run_NNLS.py gives each time it skips a
+    sample without mutations (column 1 here, or a resample that drew no mutations)."""
+    filters = warnings.catch_warnings()
+    filters.__enter__()
+    test.addCleanup(filters.__exit__, None, None, None)
+    warnings.filterwarnings('ignore', 'Sample .*: Zero mutations', UserWarning)
+
+
 def make_args(method):
     return argparse.Namespace(optimise_signatures=True, optimisation_strategy='removal',
                               weak_threshold=WEAK[0], strong_threshold=STRONG[0],
@@ -81,6 +91,9 @@ class ResamplingTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.data = {label(d): load(*d) for d in DATASETS}
+
+    def setUp(self):
+        ignore_empty_sample_warnings(self)
 
     def test_every_method(self):
         for name, (mutations, signatures) in self.data.items():
@@ -164,6 +177,9 @@ class BootstrapAttributionTest(unittest.TestCase):
     def setUpClass(cls):
         cls.data = {label(d): load(*d) for d in DATASETS}
 
+    def setUp(self):
+        ignore_empty_sample_warnings(self)
+
     def attribute(self, mutations, signatures, method, weak, seed):
         central = central_fit(mutations, signatures, method, weak)
         np.random.seed(seed)
@@ -188,6 +204,11 @@ class BootstrapAttributionTest(unittest.TestCase):
                         alone = self.attribute(mutations, signatures, method, [weak], seed=3)[(weak, strong)]
                         for got, expected in zip(outputs[:3], alone[:3]):
                             np.testing.assert_allclose(got.values, expected.values, rtol=0, atol=1e-12)
+
+    def test_empty_sample_is_skipped_with_a_warning(self):
+        mutations, signatures = self.data['SBS96']
+        with self.assertWarnsRegex(UserWarning, 'Sample 1: Zero mutations'):
+            self.attribute(mutations, signatures, R.BOOTSTRAP_METHODS[0], WEAK, seed=0)
 
     def test_unresampled_residuals_give_the_central_attribution(self):
         method = 'bootstrap_residuals'
