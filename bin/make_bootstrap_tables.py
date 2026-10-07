@@ -4,6 +4,7 @@ Refactored for improved efficiency and readability.
 """
 
 from argparse import ArgumentParser
+import os
 import numpy as np
 import pandas as pd
 from datetime import datetime
@@ -14,7 +15,8 @@ from common_methods import (
     calculate_confidence_interval,
     calculate_stat_scores, 
     calculate_sensitivity_CI, 
-    calculate_specificity_CI
+    calculate_specificity_CI,
+    truth_table_path
 )
 
 
@@ -43,20 +45,6 @@ def load_signature_table(signature_tables_path, signatures_prefix, mutation_type
             f'{signature_tables_path}/{signatures_prefix}_{mutation_type}_signatures.csv',
             index_col=0
         )
-
-
-def load_truth_table(input_folder, dataset_name, mutation_type, context):
-    """Load truth attribution table for simulated datasets."""
-    if mutation_type == 'SBS':
-        filename = f'WGS_{dataset_name}.{context}.weights.csv'
-    elif mutation_type == 'DBS':
-        filename = f'WGS_{dataset_name}.dinucs.weights.csv'
-    elif mutation_type == 'ID':
-        filename = f'WGS_{dataset_name}.indels.weights.csv'
-    else:  # SV and CNV
-        filename = f'WGS_{dataset_name}.{mutation_type}.weights.csv'
-    
-    return pd.read_csv(f'{input_folder}/{filename}', index_col=0)
 
 
 def calculate_sensitivity_thresholds(signatures_CPs_dict, signatures_to_consider, 
@@ -185,20 +173,24 @@ def calculate_signature_CPs(confidence_intervals, truth_attribution_table, sampl
                            signatures_to_consider, acting_signatures):
     """Calculate signature confidence probabilities."""
     signatures_CPs = pd.DataFrame(index=samples, columns=signatures_to_consider, dtype=float)
-    
+
     for sample in samples:
+        others_covered = []
         for signature in signatures_to_consider:
             # Add signature to truth table if not present
             if signature not in truth_attribution_table.columns:
                 truth_attribution_table[signature] = 0
-            
+
             lower, upper = confidence_intervals.loc[sample, signature][1]
             truth_value = truth_attribution_table.loc[sample, signature]
-            
+
             if signature in acting_signatures:
                 signatures_CPs.loc[sample, signature] = int(lower <= truth_value <= upper)
             else:
-                signatures_CPs.loc[sample, 'Others'] = int(lower <= truth_value <= upper)
+                others_covered.append(int(lower <= truth_value <= upper))
+        if others_covered:
+            # pooled over all signatures absent from the simulation
+            signatures_CPs.loc[sample, 'Others'] = np.mean(others_covered)
     
     # Calculate overall CPs
     return signatures_CPs.sum(axis=0).to_frame().T / len(samples)
@@ -278,12 +270,15 @@ def main():
         output_folder = f'{args.output_folder}/{base_name}/'
     
     make_folder_if_not_exists(output_folder)
-    is_simulated = 'SIM' in args.dataset_name
+    # simulated data come with their truth table (in the attributions folder)
+    truth_file = truth_table_path(input_folder, args.dataset_name, args.mutation_type, args.context)
+    is_simulated = os.path.exists(truth_file)
     if is_simulated:
         make_folder_if_not_exists(f'{output_folder}/truth_studies')
 
     print("*" * 50)
     print(f"Processing {args.mutation_type} mutation type, {args.dataset_name} dataset")
+    print(f"Truth table {truth_file}: " + ("found, scoring against it" if is_simulated else "not found (real data)"))
 
     # Load central attribution tables
     central_attr_abs = pd.read_csv(
@@ -317,12 +312,7 @@ def main():
     # Load truth table for simulated data
     truth_attribution_table = None
     if is_simulated:
-        truth_attribution_table = load_truth_table(
-            input_folder, 
-            args.dataset_name, 
-            args.mutation_type, 
-            args.context
-        )
+        truth_attribution_table = pd.read_csv(truth_file, index_col=0)
 
     # Limit samples if specified
     if args.number_of_samples != -1:
