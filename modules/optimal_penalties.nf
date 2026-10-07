@@ -22,7 +22,7 @@ process calculate_optimal_penalties {
     def prioritised_signatures_flag = params.signatures_to_prioritise ? "--signatures_to_prioritise " + params.signatures_to_prioritise.join(' ') : ''
     def deprioritised_signatures_flag = params.signatures_to_deprioritise ? "--signatures_to_deprioritise " + params.signatures_to_deprioritise.join(' ') : ''
     """
-    python ${workflow.projectDir}/bin/calculate_optimal_penalties.py -d SIM_${dataset} -t ${mutation_type} \\
+    calculate_optimal_penalties.py -d SIM_${dataset} -t ${mutation_type} \\
         -I simulated_tables/SIM_${dataset} \\
         -i attributions -o "./" \\
         -c ${params.SBS_context} \\

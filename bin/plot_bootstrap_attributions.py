@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """ plot_bootstrap_attributions.py
 Module to plot attributions with CIs on per-sample and per-signature basis.
 """

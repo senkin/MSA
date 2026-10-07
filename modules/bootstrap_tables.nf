@@ -26,7 +26,7 @@ process make_optimisation_bootstrap_tables {
     script:
     def pair = "SIM_${dataset}_${params.SBS_context}_NNLS_${suffix}"
     """
-    python ${workflow.projectDir}/bin/make_bootstrap_tables.py -d SIM_${dataset} -t ${mutation_type} -p ${signature_prefix()} \\
+    make_bootstrap_tables.py -d SIM_${dataset} -t ${mutation_type} -p ${signature_prefix()} \\
         --suffix ${suffix} -l ${params.confidence_level} \\
         -c ${params.SBS_context} -S signature_tables \\
         -T ${params.signature_attribution_thresholds.join(' ')} \\
@@ -75,7 +75,7 @@ process make_bootstrap_tables {
         ln -s ../../input_tables/${dataset}/${truth} attributions/${dataset}/
     fi
 
-    python ${workflow.projectDir}/bin/make_bootstrap_tables.py -d ${dataset} -t ${mutation_type} -p ${signature_prefix()} \\
+    make_bootstrap_tables.py -d ${dataset} -t ${mutation_type} -p ${signature_prefix()} \\
         -c ${params.SBS_context} -S signature_tables -l ${params.confidence_level} \\
         -T ${params.signature_attribution_thresholds.join(' ')} \\
         -i attributions -o "./" -n ${num_bootstrap_samples}

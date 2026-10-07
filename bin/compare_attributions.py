@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Compare the signature attributions of two runs (e.g. CPU vs GPU, fp64 vs mixed).
 
 Finds every output_*_weights_table.csv under the reference directory (central

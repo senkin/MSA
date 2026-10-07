@@ -20,7 +20,7 @@ process plot_optimisation_plots {
 
     script:
     """
-    python ${workflow.projectDir}/bin/plot_metric_heatmaps.py -d SIM_${dataset} -t ${mutation_type} \\
+    plot_metric_heatmaps.py -d SIM_${dataset} -t ${mutation_type} \\
         -i optimisation -o "./" \\
         -c ${params.SBS_context} \\
         -l ${params.metric_threshold} \\

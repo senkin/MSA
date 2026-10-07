@@ -24,7 +24,7 @@ process run_unoptimized_NNLS {
 
     script:
     """
-    python ${workflow.projectDir}/bin/run_NNLS.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} \\
+    run_NNLS.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} \\
         -p ${signature_prefix()} -i input_tables -s signature_tables -o "./" \\
         -n ${params.number_of_samples}
     """
@@ -47,7 +47,7 @@ process resolve_thresholds {
 
     script:
     """
-    python ${workflow.projectDir}/bin/run_NNLS.py -d SIM_${dataset} -t ${mutation_type} -c ${params.SBS_context} \\
+    run_NNLS.py -d SIM_${dataset} -t ${mutation_type} -c ${params.SBS_context} \\
         -p ${signature_prefix()} -x --optimisation_strategy ${params.optimisation_strategy} \\
         -W ${threshold_args(params.weak_thresholds)} -S ${threshold_args(params.strong_thresholds)} \\
         --auto_thresholds ${params.auto_weak_thresholds_number} -n ${params.auto_weak_thresholds_samples} \\
@@ -74,7 +74,7 @@ process run_optimized_NNLS {
     def truth = "simulated_tables/SIM_${dataset}/WGS_SIM_${dataset}.${table_name(mutation_type)}.weights.csv"
     """
     # Run NNLS analysis for all threshold pairs
-    python ${workflow.projectDir}/bin/run_NNLS.py -d SIM_${dataset} -t ${mutation_type} -c ${params.SBS_context} \\
+    run_NNLS.py -d SIM_${dataset} -t ${mutation_type} -c ${params.SBS_context} \\
         -p ${signature_prefix()} --optimisation_strategy ${params.optimisation_strategy} \\
         -W \$(cat ${weak_thresholds_file}) -S \$(cat ${strong_thresholds_file}) --threshold_scan ${params.threshold_scan} \\
         -i simulated_tables -s signature_tables \\
@@ -109,7 +109,7 @@ process run_bootstrap_NNLS {
     def start_index = chunk[0]
     def n_per_task = chunk[1]
     """
-    python ${workflow.projectDir}/bin/run_NNLS.py -B --n_bootstrap ${n_per_task} --bootstrap_start_index ${start_index} \\
+    run_NNLS.py -B --n_bootstrap ${n_per_task} --bootstrap_start_index ${start_index} \\
         -d SIM_${dataset} -t ${mutation_type} -c ${params.SBS_context} -x \\
         --optimisation_strategy ${params.optimisation_strategy} \\
         --bootstrap_method ${params.bootstrap_method} \\
@@ -137,7 +137,7 @@ process run_final_NNLS {
     script:
     def optimised_flag = params.optimised ? "-x" : ""
     """
-    python ${workflow.projectDir}/bin/run_NNLS.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \\
+    run_NNLS.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \\
         --optimisation_strategy ${params.optimisation_strategy} \\
         -W `< ${weak_penalty}` -S `< ${strong_penalty}` -n ${params.number_of_samples} \\
         -p ${signature_prefix()} -i input_tables -s signature_tables -o "./" ${gpu_flag()}
@@ -165,7 +165,7 @@ process run_final_bootstrap_NNLS {
     def n_per_task = chunk[1]
     def optimised_flag = params.optimised ? "-x" : ""
     """
-    python ${workflow.projectDir}/bin/run_NNLS.py -B --n_bootstrap ${n_per_task} --bootstrap_start_index ${start_index} \\
+    run_NNLS.py -B --n_bootstrap ${n_per_task} --bootstrap_start_index ${start_index} \\
         -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \\
         --optimisation_strategy ${params.optimisation_strategy} --bootstrap_method ${params.bootstrap_method} \\
         -W `< ${weak_penalty}` -S `< ${strong_penalty}` -n ${params.number_of_samples} \\

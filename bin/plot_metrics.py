@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """ plot_metrics.py
 Module to plot various metrics such as sensitivity, specificity (if simulated data) and other metrics
 Only signature prevalences are plotted on non-simulated data.

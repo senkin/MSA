@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """ make_bootstrap_tables.py
 Module to make bootstrap tables and calculate metrics/scores for simulated data.
 Refactored for improved efficiency and readability.

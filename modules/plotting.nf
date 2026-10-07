@@ -26,7 +26,7 @@ process plot_signatures {
 
     script:
     """
-    python ${workflow.projectDir}/bin/plot_mutation_spectra.py -S -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} \\
+    plot_mutation_spectra.py -S -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} \\
                                                 -p ${signature_prefix()} -s signature_tables \\
                                                 -r ${strands_flag()} ${nontranscribed_flag()} -o "./"
     """
@@ -48,9 +48,9 @@ process plot_input_spectra {
 
     script:
     """
-    python ${workflow.projectDir}/bin/plot_mutation_spectra.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
+    plot_mutation_spectra.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
                                                     -i input_tables ${strands_flag()} ${nontranscribed_flag()} -o "./"
-    python ${workflow.projectDir}/bin/plot_mutation_spectra.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
+    plot_mutation_spectra.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
                                                     -r -i input_tables ${strands_flag()} ${nontranscribed_flag()} -o "./"
     """
 }
@@ -76,8 +76,8 @@ process plot_bootstrap_attributions {
                       "-i attributions -o ./ -n ${params.number_of_bootstrapped_samples}"
     """
     # Produce both relative (weights) and absolute (mutation count) attribution plots
-    python ${workflow.projectDir}/bin/plot_bootstrap_attributions.py ${common_args}
-    python ${workflow.projectDir}/bin/plot_bootstrap_attributions.py ${common_args} -a
+    plot_bootstrap_attributions.py ${common_args}
+    plot_bootstrap_attributions.py ${common_args} -a
     """
 }
 
@@ -95,7 +95,7 @@ process plot_metrics {
 
     script:
     """
-    python ${workflow.projectDir}/bin/plot_metrics.py -d ${dataset} -t ${mutation_type} \\
+    plot_metrics.py -d ${dataset} -t ${mutation_type} \\
         -l ${params.metric_threshold} -i attributions -o "./"
     """
 }
@@ -115,13 +115,13 @@ process plot_fitted_spectra {
 
     script:
     """
-    python ${workflow.projectDir}/bin/plot_mutation_spectra.py -f -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
+    plot_mutation_spectra.py -f -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
         -i attributions ${error_flag()} ${strands_flag()} ${nontranscribed_flag()} -o "./"
-    python ${workflow.projectDir}/bin/plot_mutation_spectra.py -f -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
+    plot_mutation_spectra.py -f -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
         -r -i attributions ${error_flag()} ${strands_flag()} ${nontranscribed_flag()} -o "./"
-    python ${workflow.projectDir}/bin/plot_mutation_spectra.py -C -f -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
+    plot_mutation_spectra.py -C -f -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
         -i attributions ${error_flag()} ${strands_flag()} ${nontranscribed_flag()} -o "./"
-    python ${workflow.projectDir}/bin/plot_mutation_spectra.py -C -f -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
+    plot_mutation_spectra.py -C -f -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
         -r -i attributions ${error_flag()} ${strands_flag()} ${nontranscribed_flag()} -o "./"
     """
 }
@@ -141,9 +141,9 @@ process plot_residuals {
 
     script:
     """
-    python ${workflow.projectDir}/bin/plot_mutation_spectra.py -H -R -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
+    plot_mutation_spectra.py -H -R -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
         -i attributions ${error_flag()} ${strands_flag()} ${nontranscribed_flag()} -o "./"
-    python ${workflow.projectDir}/bin/plot_mutation_spectra.py -C -R -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
+    plot_mutation_spectra.py -C -R -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} --number ${params.number_of_samples} \\
         -i attributions ${error_flag()} ${strands_flag()} ${nontranscribed_flag()} -o "./"
     """
 }

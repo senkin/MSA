@@ -22,7 +22,7 @@ process convert_data {
     path "${dataset}/*.csv", emit: input_files, optional: true
 
     script:
-    def base_cmd = "python ${workflow.projectDir}/bin/convert_SP_to_MSA.py"
+    def base_cmd = "convert_SP_to_MSA.py"
     def mutation_types_arg = "-t ${mutation_types_list.join(' ')}"
     def signature_tables_arg = "-s reference_signatures"
     def output_arg = "-o ./"

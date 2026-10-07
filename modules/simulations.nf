@@ -21,7 +21,7 @@ process simulate_data {
     script:
     def noise_flag = params.add_noise ? "-z" : ""
     """
-    python ${workflow.projectDir}/bin/simulate_data.py \\
+    simulate_data.py \\
         -d SIM_${dataset} \\
         -t ${mutation_type} \\
         -c ${params.SBS_context} \\
