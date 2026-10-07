@@ -1264,7 +1264,11 @@ def parse_thresholds(values, allow_auto=False):
         if not allow_auto:
             raise ValueError("'auto' is only supported for the weak threshold")
         return 'auto'
-    return sorted({float(v) for v in values})
+    thresholds = {float(v) for v in values}
+    if any(np.isnan(t) for t in thresholds):
+        # every comparison with NaN is false: the optimisation would silently do nothing
+        raise ValueError(f"thresholds must be numbers, got {' '.join(values)}")
+    return sorted(thresholds)
 
 
 def write_threshold_labels(folder, weak_thresholds, strong_thresholds):
@@ -1388,9 +1392,13 @@ if __name__ == '__main__':
         return path
 
     def bootstrap_suffix(weak, strong):
-        if multi:  # names downstream expect: <weak label>_<strong label>
+        if args.bootstrap_output_suffix and not multi:
+            return f'_{args.bootstrap_output_suffix}'
+        if args.add_suffix and args.optimise_signatures:
+            # names downstream expect, as in the folder name: <weak label>_<strong label>
+            # (also for a single threshold pair, e.g. -W auto resolving to 0 alone)
             return f'_{format_threshold(weak)}_{format_threshold(strong)}'
-        return f'_{args.bootstrap_output_suffix}' if args.bootstrap_output_suffix else ''
+        return ''
 
     if not auto and not args.resolve_thresholds_only:
         for weak in weak_thresholds:

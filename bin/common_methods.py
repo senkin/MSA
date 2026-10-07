@@ -2,6 +2,8 @@
 Common methods module used across different scripts
 """
 import os
+import re
+import glob
 import math
 import json
 import copy
@@ -13,14 +15,6 @@ from scipy import stats
 from scipy.spatial import distance
 from statsmodels.stats.proportion import proportion_confint
 import matplotlib.pyplot as plt
-
-def is_tool(name):
-    """Check whether `name` is on PATH and marked as executable."""
-
-    # from whichcraft import which # python 2 option
-    from shutil import which
-
-    return which(name) is not None
 
 def make_folder_if_not_exists(folder):
     """Create a folder if it does not exist"""
@@ -46,25 +40,33 @@ def format_threshold(threshold):
         label = f"{threshold:.6f}".rstrip('0').rstrip('.')
         return label if float(label) == threshold else repr(float(threshold))
 
-def merge_plots(input_plots_filenames, merged_plot_filename, merge_tool = 'pdfunite'):
-    if is_tool(merge_tool):
-        if merge_tool=='pdfunite':
-            merge_command = merge_tool + ' $(ls -v ' + input_plots_filenames + ') ' + merged_plot_filename
-        elif merge_tool=='pdftk':
-            merge_command = merge_tool + ' $(ls -v ' + input_plots_filenames + ') output ' + merged_plot_filename
-        else:
-            raise ValueError('Output plots merge failed: %s tool unknown (please use pdftk or pdfunite)' % merge_tool)
-    else:
-        warnings.warn('Output plots merge failed: %s tool not available' % merge_tool)
-        return
+def truth_table_path(folder, dataset_name, mutation_type, context=96):
+    """Path of a dataset's truth table (simulated signature weights) in folder.
 
-    print('Merging output plots with command:', merge_command)
+    A dataset counts as simulated when this file exists, whatever its name.
+    """
+    table = {'SBS': str(context), 'DBS': 'dinucs', 'ID': 'indels'}.get(mutation_type, mutation_type)
+    return f'{folder}/WGS_{dataset_name}.{table}.weights.csv'
+
+def merge_plots(input_plots_filenames, merged_plot_filename):
+    """Merge the PDFs matching a glob pattern into one file, in natural order (2 before 10)."""
     try:
-        os.system(merge_command)
-    except:
-        warnings.warn("Could not create a merged file %s. Please check if input files/folders exist." % merged_plot_filename)
-    else:
-        print("Resulting merged pdf: %s" % merged_plot_filename)
+        from pypdf import PdfWriter
+    except ImportError:
+        warnings.warn('Output plots merge skipped: pypdf is not installed')
+        return
+    def natural_key(path):
+        return [int(part) if part.isdigit() else part for part in re.split(r'(\d+)', path)]
+    input_files = sorted(glob.glob(input_plots_filenames), key=natural_key)
+    if not input_files:
+        warnings.warn('Output plots merge skipped: no files match %s' % input_plots_filenames)
+        return
+    writer = PdfWriter()
+    for input_file in input_files:
+        writer.append(input_file)
+    with open(merged_plot_filename, 'wb') as merged_file:
+        writer.write(merged_file)
+    print("Resulting merged pdf: %s" % merged_plot_filename)
 
 def write_data_to_JSON(data, JSON_output_file, json_orient = 'columns', indent = True):
     output_folder = JSON_output_file.rsplit('/',1)[0]
