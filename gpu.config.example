@@ -9,7 +9,7 @@
 // outranks a generic setting), so these win over a cluster-wide default queue.
 
 process {
-    withLabel: gpu_nnls {
+    withLabel: 'gpu_nnls' {
         queue = 'gpu'                       // your GPU partition/queue
         clusterOptions = '--gres=gpu:1'     // SLURM: actually request a GPU
         // accelerator = 1                   // executor-agnostic alternative (k8s/cloud)

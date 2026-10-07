@@ -14,7 +14,6 @@ from io import StringIO
 from scipy import stats
 from scipy.spatial import distance
 from statsmodels.stats.proportion import proportion_confint
-import matplotlib.pyplot as plt
 
 def make_folder_if_not_exists(folder):
     """Create a folder if it does not exist"""
@@ -113,6 +112,8 @@ def read_data_from_JSON(JSON_input_file, pandas=True, json_orient='columns'):
     return data
 
 def plot_array_as_histogram(arrays, labels, title, bins=[0.01*k for k in range(101)], savepath='./hist.pdf'):
+    # imported here: the attribution scripts import this module without plotting
+    import matplotlib.pyplot as plt
     fig = plt.figure()
     ax = fig.add_subplot(111)
     # bins = [0.025*k for k in range(42)]

@@ -1,86 +1,66 @@
 // modules/data_conversion.nf
 
-workflow convert_data_workflow {
-    take:
-    dataset
-    input_path
-    convert_type // 'matrix_generator_matrices', 'extractor_matrices', 'signature_tables', 'specific_mutation_files', 'specific_signature_files'
-    mutation_types_list
+// Convert SigProfiler outputs, or a single user-provided file, to MSA tables: input mutation
+// tables (<dataset>/WGS_<dataset>.<table>.csv) or signature tables (<prefix>_conv_*.csv).
+// convert_type: 'matrix_generator_matrices', 'extractor_matrices', 'signature_tables',
+// 'specific_mutation_files' or 'specific_signature_files'.
+process convert_data {
+    tag "${convert_type}/${dataset}"
+    // converted tables are intermediate files: kept in <output_path>/temp with cleanup_temp = false
+    publishDir "${params.output_path}/temp/${convert_type.contains('signature') ? 'signature_tables' : 'input_tables'}",
+        mode: 'copy', overwrite: true, enabled: !params.cleanup_temp
 
-    main:
-    // Define and invoke the combined process
-    process convert_data {
-        tag "${convert_type}/${dataset}"
-        
-        // Use temp_path for all converted outputs
-        publishDir (
-            convert_type.contains('signature') ? "${params.output_path}/temp/signature_tables" : "${params.output_path}/temp/input_tables",
-            mode: 'copy',
-            overwrite: true
-        )
+    input:
+    val dataset
+    path source, stageAs: 'source/*'                   // SigProfiler output folder or a single file
+    val convert_type
+    val mutation_types_list
+    path reference_signatures, stageAs: 'reference_signatures/*'   // index templates
 
-        input:
-        val dataset
-        val input_path  // Can be a directory path or list of specific files
-        val convert_type
-        val mutation_types_list
+    output:
+    path '*.csv', emit: signature_files, optional: true
+    path "${dataset}/*.csv", emit: input_files, optional: true
 
-        output:
-        path '*.csv', emit: signature_files, optional: !(convert_type in ['signature_tables', 'specific_signature_files'])
-        path '**/*.csv', emit: input_files, optional: convert_type in ['signature_tables', 'specific_signature_files']
+    script:
+    def base_cmd = "python ${workflow.projectDir}/bin/convert_SP_to_MSA.py"
+    def mutation_types_arg = "-t ${mutation_types_list.join(' ')}"
+    def signature_tables_arg = "-s reference_signatures"
+    def output_arg = "-o ./"
+    def COSMIC_arg = params.COSMIC_signatures ? "--COSMIC" : ""
+    def signature_prefix_arg = "${params.signature_prefix}_conv"
 
-        script:
-        // Base command components
-        def base_cmd = "python ${workflow.projectDir}/bin/convert_SP_to_MSA.py"
-        def mutation_types_arg = "-t ${mutation_types_list.join(' ')}"
-        def signature_tables_arg = "-s ${params.signature_tables}"
-        def temp_output_arg = "-o ./"  // Output to process work directory first, then publishDir handles the move
-        def COSMIC_arg = (params.COSMIC_signatures) ? "--COSMIC" : ""
-        def signature_prefix_arg = "${params.signature_prefix}_conv"
-        
-        if (convert_type == 'matrix_generator_matrices') {
-            """
-            ${base_cmd} -d ${dataset} ${mutation_types_arg} \\
-                -i ${input_path} ${signature_tables_arg} ${temp_output_arg}
-            """
-        } else if (convert_type == 'extractor_matrices') {
-            """
-            ${base_cmd} -E -d ${dataset} ${mutation_types_arg} \\
-                -i ${input_path} ${signature_tables_arg} ${temp_output_arg}
-            """
-        } else if (convert_type == 'signature_tables') {
-            """
-            ${base_cmd} -S ${mutation_types_arg} \\
-                -n ${signature_prefix_arg} ${COSMIC_arg} \\
-                -i ${input_path} ${signature_tables_arg} ${temp_output_arg}
-            """
-        } else if (convert_type == 'specific_mutation_files') {
-            // Handle specific mutation files - input_path should be a list of files
-            """
-            ${base_cmd} -d ${dataset} ${mutation_types_arg} -c ${params.SBS_context} \\
-                -I ${input_path} ${signature_tables_arg} ${temp_output_arg}
-            """
-        } else if (convert_type == 'specific_signature_files') {
-            // Handle specific signature files - input_path should be a list of files
-            """
-            ${base_cmd} -S ${mutation_types_arg} -c ${params.SBS_context} \\
-                -n ${signature_prefix_arg} ${COSMIC_arg} \\
-                -I ${input_path} ${signature_tables_arg} ${temp_output_arg}
-            """
-        } else {
-            """
-            echo "Invalid convert_type: ${convert_type}"
-            echo "Supported types: matrix_generator_matrices, extractor_matrices, signature_tables, specific_mutation_files, specific_signature_files"
-            exit 1
-            """
-        }
+    if (convert_type == 'matrix_generator_matrices') {
+        """
+        ${base_cmd} -d ${dataset} ${mutation_types_arg} \\
+            -i ${source} ${signature_tables_arg} ${output_arg}
+        """
+    } else if (convert_type == 'extractor_matrices') {
+        """
+        ${base_cmd} -E -d ${dataset} ${mutation_types_arg} \\
+            -i ${source} ${signature_tables_arg} ${output_arg}
+        """
+    } else if (convert_type == 'signature_tables') {
+        """
+        ${base_cmd} -S ${mutation_types_arg} \\
+            -n ${signature_prefix_arg} ${COSMIC_arg} \\
+            -i ${source} ${signature_tables_arg} ${output_arg}
+        """
+    } else if (convert_type == 'specific_mutation_files') {
+        """
+        ${base_cmd} -d ${dataset} ${mutation_types_arg} -c ${params.SBS_context} \\
+            -I ${source} ${signature_tables_arg} ${output_arg}
+        """
+    } else if (convert_type == 'specific_signature_files') {
+        """
+        ${base_cmd} -S ${mutation_types_arg} -c ${params.SBS_context} \\
+            -n ${signature_prefix_arg} ${COSMIC_arg} \\
+            -I ${source} ${signature_tables_arg} ${output_arg}
+        """
+    } else {
+        """
+        echo "Invalid convert_type: ${convert_type}"
+        echo "Supported types: matrix_generator_matrices, extractor_matrices, signature_tables, specific_mutation_files, specific_signature_files"
+        exit 1
+        """
     }
-
-    // Invoke the process
-    convert_data(dataset, input_path, convert_type, mutation_types_list)
-
-    // Emit the converted output
-    emit:
-    signature_files = convert_data.out.signature_files
-    input_files = convert_data.out.input_files
 }

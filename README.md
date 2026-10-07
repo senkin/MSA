@@ -21,11 +21,8 @@ nextflow run https://gitlab.com/s.senkin/MSA -profile conda,test
 export NXF_VER=25.04.8
 ```
 
-**Nextflow 25+/26+**: newer Nextflow ships a stricter config/DSL parser that rejects some constructs this pipeline still uses (e.g. `for` loops and the `mix(*list)` spread). Until the pipeline is migrated to the strict syntax, select the legacy parser via an environment variable before running (e.g. in your job script or shell profile):
-
-```bash
-export NXF_SYNTAX_PARSER=v1
-```
+**Nextflow 25+/26+**: the pipeline follows Nextflow's strict syntax (`nextflow lint run_auto_optimised_analysis.nf modules nextflow.config` reports no errors), so it runs with both the legacy parser and the strict one of newer releases (`NXF_SYNTAX_PARSER=v2`); no parser setting is needed.
+Note that with `NXF_SYNTAX_PARSER=v2`, Nextflow 25.04 and 25.10 reject `-profile` together with an extra `-c` file ("Unknown configuration profile", in any pipeline): keep the default parser for runs with e.g. `-c gpu.config`.
 
 It is recommended to use [docker](https://www.docker.com/) or [singularity](https://sylabs.io/singularity/) profiles as these normally provide greater stability and reproducibility than [conda](https://conda.io).
 
@@ -85,15 +82,15 @@ The pipeline processes inputs in the following priority order:
 | --help | null | Print usage and optional parameters |
 | --input_mutation_table | null | Specific mutation table file to convert and use (overrides all other inputs) |
 | --signatures_file | null | Specific signature file to convert and use (overrides all other inputs) |
-| --SP_matrix_generator_output_path | null | Use SigProfilerMatrixGenerator output from specified **full path** |
-| --SP_extractor_output_path | null | Use SigProfilerExtractor output from specified **full path** to attribute signatures |
+| --SP_matrix_generator_output_path | null | Use SigProfilerMatrixGenerator output from the specified path |
+| --SP_extractor_output_path | null | Use SigProfilerExtractor output from the specified path to attribute signatures |
 | --dataset | SIM_test | Set the name of the dataset |
-| --input_tables | $baseDir/input_mutation_tables | **Full path** to input mutation tables directory |
-| --signature_tables | $baseDir/signature_tables | **Full path** to input signature tables directory |
+| --input_tables | $projectDir/input_mutation_tables | Input mutation tables directory: the tables of a dataset are read from `<input_tables>/<dataset>/` |
+| --signature_tables | $projectDir/signature_tables | Input signature tables directory |
 | --signature_prefix | sigProfiler | Prefix of signature files (e.g. sigProfiler, sigRandom) |
-| --output_path | . | Output path for plots and tables |
-| --temp_path | $output_path/temp | Temporary path for converted inputs |
-| --mutation_types | ['SBS'] | Mutation types to analyse. Only ONE can be specified from command line; use list in script for multiple |
+| --output_path | . | Output path for plots and tables (absolute, or relative to the launch directory) |
+| --cleanup_temp | true | `true`: only results are published to the output path; `false`: intermediate files too (see [Output structure](#output-structure)) |
+| --mutation_types | ['SBS'] | Mutation types to analyse: a list in the config, or comma-separated on the command line (e.g. `--mutation_types SBS,DBS,ID`) |
 | --number_of_samples | -1 | Number of samples to analyse (-1 means all available) |
 | --SBS_context | 96 | SBS context to use (96, 192, 288, 1536, or 4608) |
 | --COSMIC_signatures | false | If true, use COSMIC signatures from SigProfiler output; otherwise use de-novo |
@@ -118,15 +115,26 @@ output_path/
 │   └── {dataset}/
 │       ├── output_*_mutations_table.csv
 │       ├── output_*_weights_table.csv
-│       ├── signatures_prevalences_*.csv
-│       └── bootstrap_output/
-├── output_tables_unoptimised/  # Unoptimized results
+│       ├── CIs_*.csv, signatures_prevalences_*.csv, pruned_attribution_*.csv
+│       ├── truth_studies/      # simulated data only (with a truth table)
+│       ├── *.json              # bootstrap distributions (*)
+│       └── bootstrap_output/   # bootstrap iterations (*)
+├── outputs_optimisation/
+│   ├── SIM_{dataset}/{type}/   # penalty scan: thresholds, metrics, optimal penalties
+│   └── SIM_{dataset}_{context}_NNLS_{weak}_{strong}/  # per-penalty attributions and bootstrap (*)
+├── optimisation_plots/
 ├── plots/                      # All generated plots
 ├── pipeline_info/              # run_info_<run name>.txt: seed, code revision, versions, parameters
-└── temp/                       # Temporary conversions
+└── temp/                       # (*) converted inputs, unoptimised attributions, simulated data
     ├── input_tables/
-    └── signature_tables/
+    ├── signature_tables/
+    ├── output_tables_unoptimised/
+    └── output_tables/
 ```
+(*) intermediate files, published only with `--cleanup_temp false`. Each task reads its inputs
+from its own work directory (staged through channels) and the pipeline never reads back from the
+output path, so results do not depend on it being shared with the tasks, and `-resume` reuses
+everything cached in the work directory.
 
 ## GPU acceleration (experimental)
 
@@ -356,7 +364,7 @@ Key improvements in the DSL2 version:
 - Improved caching and resume functionality
 - Support for specific file inputs
 - Cleaner module organization
-- All temporary files in configurable temp directory
+- Intermediate files kept in the work directory (published to `temp/` with `--cleanup_temp false`)
 - Better error handling and validation
 - Unified output directory structure
 

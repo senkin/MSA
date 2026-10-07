@@ -1,79 +1,40 @@
-// def signature_prefix = (params.SP_extractor_output_path) ? params.signature_prefix + "_conv" : params.signature_prefix
+// modules/optimal_penalties.nf
 
-workflow OPTIMAL_PENALTIES_workflow {
-    take:
-    bootstrap_tables        // all bootstrap tables from previous step
-    dataset_mutation_pairs  // tuple of (dataset, mutation_type)
-    weak_thresholds         // channel: list of weak threshold labels
-    strong_thresholds       // channel: list of strong threshold labels
-    
-    main:
-    // Process to calculate optimal penalties
-    process calculate_optimal_penalties {
-        tag "${mutation_type}/${dataset}"
-        publishDir "${params.output_path}/outputs_optimisation", mode: 'copy', overwrite: true
-        
-        input:
-        path '*.csv'
-        tuple val(dataset), val(mutation_type)
-        val weak_thresholds_list
-        val strong_thresholds_list
-        
-        output:
-        tuple val(dataset), val(mutation_type), emit: penalties_for_optimisation_plotting
-        tuple val(dataset), val(mutation_type), emit: penalties_for_central_NNLS_attribution  
-        tuple val(dataset), val(mutation_type), emit: penalties_for_bootstrap_NNLS_attribution
-        path "*/*/*.csv", emit: penalty_analysis_csv
-        path "*/*/*.json", emit: penalty_analysis_json
-        path "SIM_${dataset}/${mutation_type}/optimal_weak_penalty", emit: optimal_weak_penalty
-        path "SIM_${dataset}/${mutation_type}/optimal_strong_penalty", emit: optimal_strong_penalty
-        
-        script:
-        // Handle optional flags
-        def no_CI_for_penalties_flag = params.no_CI_for_penalties ? "--no_CI" : ""
-        def calculate_penalty_on_average_flag = params.calculate_penalty_on_average ? "--average" : ""
-        def prioritised_signatures_flag = params.signatures_to_prioritise ? "--signatures_to_prioritise " + params.signatures_to_prioritise.join(' ') : ''
-        def deprioritised_signatures_flag = params.signatures_to_deprioritise ? "--signatures_to_deprioritise " + params.signatures_to_deprioritise.join(' ') : ''
-        def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
-        
-        """
-        python ${workflow.projectDir}/bin/calculate_optimal_penalties.py -d SIM_${dataset} -t ${mutation_type} \\
-            -I ${params.output_path}/temp/output_tables/SIM_${dataset} \\
-            -i ${params.output_path}/outputs_optimisation -o "./" \\
-            -c ${params.SBS_context} \\
-            ${no_CI_for_penalties_flag} \\
-            ${calculate_penalty_on_average_flag} \\
-            ${prioritised_signatures_flag} \\
-            ${deprioritised_signatures_flag} \\
-            -M ${params.metric_to_prioritise} \\
-            -T ${params.metric_threshold} \\
-            -W ${weak_thresholds_list.join(' ')} \\
-            -S ${strong_thresholds_list.join(' ')} \\
-            --signature_path ${params.output_path}/temp/signature_tables \\
-            -p ${signature_prefix}
-        """
-    }
-    
-    // Collect all bootstrap tables
-    bootstrap_tables
-        .collect()
-        .set { all_bootstrap_tables }
-    
-    // Since we're now within the mutation_type loop, we know exactly what 
-    // dataset and mutation_type we're dealing with - no need for unique()
-    calculate_optimal_penalties(
-        all_bootstrap_tables,
-        dataset_mutation_pairs,  // This is already the specific pair for this mutation type
-        weak_thresholds,
-        strong_thresholds
-    )
-    
-    emit:
-    penalties_for_optimisation_plotting = calculate_optimal_penalties.out.penalties_for_optimisation_plotting
-    penalties_for_central_NNLS_attribution = calculate_optimal_penalties.out.penalties_for_central_NNLS_attribution
-    penalties_for_bootstrap_NNLS_attribution = calculate_optimal_penalties.out.penalties_for_bootstrap_NNLS_attribution
-    penalty_analysis_csv = calculate_optimal_penalties.out.penalty_analysis_csv
-    penalty_analysis_json = calculate_optimal_penalties.out.penalty_analysis_json
-    optimal_weak_penalty = calculate_optimal_penalties.out.optimal_weak_penalty
-    optimal_strong_penalty = calculate_optimal_penalties.out.optimal_strong_penalty
+include { signature_prefix } from './common'
+
+// Optimal penalties of a mutation type from the truth studies of every threshold pair
+process calculate_optimal_penalties {
+    tag "${mutation_type}/${dataset}"
+    publishDir "${params.output_path}/outputs_optimisation", mode: 'copy', overwrite: true
+
+    input:
+    tuple val(dataset), val(mutation_type), path("simulated_tables/SIM_${dataset}/*"), path(weak_thresholds_file), path(strong_thresholds_file),
+        path(pairs, stageAs: 'attributions/*')     // bundle/<pair> of every threshold pair
+    path signature_files, stageAs: 'signature_tables/*'
+
+    output:
+    tuple val(dataset), val(mutation_type), path("SIM_${dataset}/${mutation_type}/optimal_weak_penalty"), path("SIM_${dataset}/${mutation_type}/optimal_strong_penalty"), emit: penalties
+    tuple val(dataset), val(mutation_type), path("SIM_${dataset}/${mutation_type}/*.*"), emit: analysis   // tables (csv, json)
+
+    script:
+    def no_CI_for_penalties_flag = params.no_CI_for_penalties ? "--no_CI" : ""
+    def calculate_penalty_on_average_flag = params.calculate_penalty_on_average ? "--average" : ""
+    def prioritised_signatures_flag = params.signatures_to_prioritise ? "--signatures_to_prioritise " + params.signatures_to_prioritise.join(' ') : ''
+    def deprioritised_signatures_flag = params.signatures_to_deprioritise ? "--signatures_to_deprioritise " + params.signatures_to_deprioritise.join(' ') : ''
+    """
+    python ${workflow.projectDir}/bin/calculate_optimal_penalties.py -d SIM_${dataset} -t ${mutation_type} \\
+        -I simulated_tables/SIM_${dataset} \\
+        -i attributions -o "./" \\
+        -c ${params.SBS_context} \\
+        ${no_CI_for_penalties_flag} \\
+        ${calculate_penalty_on_average_flag} \\
+        ${prioritised_signatures_flag} \\
+        ${deprioritised_signatures_flag} \\
+        -M ${params.metric_to_prioritise} \\
+        -T ${params.metric_threshold} \\
+        -W \$(cat ${weak_thresholds_file}) \\
+        -S \$(cat ${strong_thresholds_file}) \\
+        --signature_path signature_tables \\
+        -p ${signature_prefix()}
+    """
 }

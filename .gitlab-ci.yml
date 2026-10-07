@@ -19,3 +19,10 @@ test_nextflow:
   stage: test
   script:
     - mamba run -n MSA nextflow run run_auto_optimised_analysis.nf -profile test
+
+# strict syntax: the pipeline must also run with the strict parser of newer Nextflow releases
+lint_nextflow:
+  <<: *msa_image
+  stage: test
+  script:
+    - mamba run -n MSA nextflow lint run_auto_optimised_analysis.nf modules nextflow.config
