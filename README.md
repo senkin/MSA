@@ -233,8 +233,9 @@ jobs. If the selected penalty is the largest one scanned, a warning suggests ext
   (`params.container_image`). Pin Nextflow with `export NXF_VER=25.04.8`.
 * **Tests.** `python -m unittest discover -s tests -v` (CPU only, a few minutes) checks that the
   GPU code path gives the same attributions as the CPU path (including MSA's cuML wrapper, on a
-  NumPy stand-in for the GPU), that simulations and bootstrap chunks are reproducible, and every
-  bootstrap method on every mutation type and SBS context.
+  NumPy stand-in for the GPU), that simulations and bootstrap chunks are reproducible, every
+  bootstrap method on every mutation type and SBS context, simulations from inputs with empty
+  samples, the bootstrap summary tables and the penalty selection.
   To compare the attributions of any two runs, e.g. CPU vs GPU, use
   `python bin/compare_attributions.py <reference dir> <candidate dir>`.
 
@@ -254,9 +255,9 @@ nextflow run run_auto_optimised_analysis.nf -profile conda,test \
     --output_path test
 ```
 
-Alternatively, to run the pipeline without optimisation, using fixed penalties (DSL1 only, please downgrade Nextflow with `export NXF_VER=22.10.4`):
+Alternatively, to run the pipeline without optimisation, using fixed penalties (DSL1 only, now under `legacy/`; please downgrade Nextflow with `export NXF_VER=22.10.4`):
 ```bash
-nextflow run run_analysis.nf -profile conda \
+nextflow run legacy/run_analysis.nf -profile conda \
     --dataset SIM_test \
     --weak_threshold 0.02 \
     --output_path test
@@ -275,7 +276,7 @@ nextflow run run_auto_optimised_analysis.nf -profile conda -resume \
 ### Setting up dependencies
 
 If you cannot run *nextflow*, you can still run some basic analysis manually (scripts in the *./bin* folder).
-Dependencies: *pandas*, *numpy*, *scipy*, *matplotlib* and *seaborn*. 
+Dependencies: *pandas*, *numpy*, *scipy*, *numba*, *matplotlib*, *seaborn* and *statsmodels*. 
 
 Set up the virtual environment using [conda](https://conda.io):
 

@@ -291,6 +291,14 @@ class CommandLineTest(unittest.TestCase):
                         (loop / f'SIM_test/bootstrap_output/output_SIM_test_SBS_5_{table}.csv').read_bytes(),
                         (single / f'SIM_test/output_SIM_test_SBS_{table}.csv').read_bytes())
 
+    def test_single_threshold_pair_named_like_several(self):
+        # the optimisation's tables step expects <weak>_<strong> in every bootstrap file name,
+        # also when the scan has a single pair (e.g. -W auto resolving to 0 alone)
+        out = self.tmp / 'single_pair'
+        self.bootstrap(DATASETS[0], out, '--n_bootstrap', 1, '-W', 0.01, '-S', 0, '--add_suffix')
+        self.assertTrue((out / 'SIM_test_96_NNLS_0.01_0/bootstrap_output/'
+                         'output_SIM_test_SBS_0.01_0_1_weights_table.csv').exists())
+
     def test_central_run_leaves_inputs_untouched(self):
         before = sorted(os.listdir(self.tmp / 'inputs/SIM_test'))
         run_nnls('-d', 'SIM_test', '-t', 'SBS', '-c', 96, '-x', '-W', 0.01, '-S', 0, '-p', 'sigTest',
