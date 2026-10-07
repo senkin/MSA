@@ -15,14 +15,14 @@ Once you have installed Nextflow, run the test job locally or on your favourite 
 nextflow run https://gitlab.com/s.senkin/MSA -profile conda,test
 ```
 
-**Important**: The pipeline uses Nextflow DSL2 and is tested with Nextflow 25.04.8 (`nextflowVersion = '>=25.04.0'` in the manifest). Pin the version for reproducible runs:
+**Important**: The pipeline uses Nextflow DSL2 and is tested with Nextflow 26.04.6 (`nextflowVersion = '>=25.04.0'` in the manifest). Pin the version for reproducible runs:
 
 ```bash
-export NXF_VER=25.04.8
+export NXF_VER=26.04.6
 ```
 
-**Nextflow 25+/26+**: the pipeline follows Nextflow's strict syntax (`nextflow lint run_auto_optimised_analysis.nf modules nextflow.config` reports no errors), so it runs with both the legacy parser and the strict one of newer releases (`NXF_SYNTAX_PARSER=v2`); no parser setting is needed.
-Note that with `NXF_SYNTAX_PARSER=v2`, Nextflow 25.04 and 25.10 reject `-profile` together with an extra `-c` file ("Unknown configuration profile", in any pipeline): keep the default parser for runs with e.g. `-c gpu.config`.
+**Strict syntax**: the pipeline follows Nextflow's strict syntax (`nextflow lint run_auto_optimised_analysis.nf modules nextflow.config` reports no errors), so it runs with the strict parser, the default from Nextflow 26.04, as well as with the legacy one (`NXF_SYNTAX_PARSER=v1`, the default of earlier releases); no parser setting is needed.
+With Nextflow 25.04 or 25.10, keep their default (legacy) parser: their strict parser (`NXF_SYNTAX_PARSER=v2`) rejects `-profile` together with an extra `-c` file, e.g. `-c gpu.config` ("Unknown configuration profile", in any pipeline; fixed in Nextflow 26.04).
 
 It is recommended to use [docker](https://www.docker.com/) or [singularity](https://sylabs.io/singularity/) profiles as these normally provide greater stability and reproducibility than [conda](https://conda.io).
 
@@ -238,7 +238,7 @@ jobs. If the selected penalty is the largest one scanned, a warning suggests ext
   your platform from [conda-lock/](conda-lock) (`--conda_env environment.yml` for an unpinned
   solve); after editing `environment.yml`, regenerate the locks with `conda-lock/update_locks.sh`.
   `-profile docker/singularity/apptainer` use the MSA image pinned by digest
-  (`params.container_image`). Pin Nextflow with `export NXF_VER=25.04.8`.
+  (`params.container_image`). Pin Nextflow with `export NXF_VER=26.04.6`.
 * **Tests.** `python -m unittest discover -s tests -v` (CPU only, a few minutes) checks that the
   GPU code path gives the same attributions as the CPU path (including MSA's cuML wrapper, on a
   NumPy stand-in for the GPU), that simulations and bootstrap chunks are reproducible, every

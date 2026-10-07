@@ -7,8 +7,9 @@
 process convert_data {
     tag "${convert_type}/${dataset}"
     // converted tables are intermediate files: kept in <output_path>/temp with cleanup_temp = false
-    publishDir "${params.output_path}/temp/${convert_type.contains('signature') ? 'signature_tables' : 'input_tables'}",
-        mode: 'copy', overwrite: true, enabled: !params.cleanup_temp
+    // (a closure, since the path uses an input: as a plain string it fails with the strict parser)
+    publishDir { "${params.output_path}/temp/${convert_type.contains('signature') ? 'signature_tables' : 'input_tables'}" },
+        mode: 'copy', overwrite: true, enabled: !params.cleanup_temp.toString().toBoolean()
 
     input:
     val dataset
@@ -26,7 +27,7 @@ process convert_data {
     def mutation_types_arg = "-t ${mutation_types_list.join(' ')}"
     def signature_tables_arg = "-s reference_signatures"
     def output_arg = "-o ./"
-    def COSMIC_arg = params.COSMIC_signatures ? "--COSMIC" : ""
+    def COSMIC_arg = params.COSMIC_signatures.toString().toBoolean() ? "--COSMIC" : ""
     def signature_prefix_arg = "${params.signature_prefix}_conv"
 
     if (convert_type == 'matrix_generator_matrices') {

@@ -8,7 +8,7 @@ process simulate_data {
     tag "${dataset}_${mutation_type}"
     // intermediate files, kept in <output_path>/temp with cleanup_temp = false or when only simulating
     publishDir "${params.output_path}/temp/output_tables", mode: 'copy', overwrite: true,
-        enabled: !params.cleanup_temp || params.run_only_simulations
+        enabled: !params.cleanup_temp.toString().toBoolean() || params.run_only_simulations.toString().toBoolean()
 
     input:
     tuple val(dataset), val(mutation_type), path(mutations_table)
@@ -19,7 +19,7 @@ process simulate_data {
     tuple val(dataset), val(mutation_type), path("SIM_${dataset}/WGS_SIM_${dataset}.*.csv"), emit: tables
 
     script:
-    def noise_flag = params.add_noise ? "-z" : ""
+    def noise_flag = params.add_noise.toString().toBoolean() ? "-z" : ""
     """
     simulate_data.py \\
         -d SIM_${dataset} \\

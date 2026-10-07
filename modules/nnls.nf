@@ -6,12 +6,12 @@
 //   signature_tables/<prefix>_<type>_signatures.csv      signature tables
 // and writes its outputs in its own work directory only.
 
-include { signature_prefix; gpu_flag; table_name; threshold_args } from './common'
+include { signature_prefix; gpu_flag; table_name; list_args } from './common'
 
 // Unoptimised attribution of the input data, whose signature activities seed the simulations
 process run_unoptimized_NNLS {
     tag "${mutation_type}/${dataset}"
-    publishDir "${params.output_path}/temp/output_tables_unoptimised", mode: 'copy', overwrite: true, enabled: !params.cleanup_temp
+    publishDir "${params.output_path}/temp/output_tables_unoptimised", mode: 'copy', overwrite: true, enabled: !params.cleanup_temp.toString().toBoolean()
 
     input:
     tuple val(dataset), val(mutation_type)
@@ -36,7 +36,8 @@ process run_unoptimized_NNLS {
 // simulated data; an explicit list is only formatted.
 process resolve_thresholds {
     tag "${mutation_type}/${dataset}"
-    publishDir "${params.output_path}/outputs_optimisation/SIM_${dataset}/${mutation_type}", mode: 'copy', overwrite: true
+    // a closure, since the path uses the inputs (as a plain string it fails with the strict parser)
+    publishDir { "${params.output_path}/outputs_optimisation/SIM_${dataset}/${mutation_type}" }, mode: 'copy', overwrite: true
 
     input:
     tuple val(dataset), val(mutation_type), path("simulated_tables/SIM_${dataset}/*")
@@ -49,7 +50,7 @@ process resolve_thresholds {
     """
     run_NNLS.py -d SIM_${dataset} -t ${mutation_type} -c ${params.SBS_context} \\
         -p ${signature_prefix()} -x --optimisation_strategy ${params.optimisation_strategy} \\
-        -W ${threshold_args(params.weak_thresholds)} -S ${threshold_args(params.strong_thresholds)} \\
+        -W ${list_args(params.weak_thresholds)} -S ${list_args(params.strong_thresholds)} \\
         --auto_thresholds ${params.auto_weak_thresholds_number} -n ${params.auto_weak_thresholds_samples} \\
         -i simulated_tables -s signature_tables \\
         -o "./" --resolve_thresholds_only --thresholds_dir ./
@@ -61,7 +62,7 @@ process resolve_thresholds {
 process run_optimized_NNLS {
     tag "${mutation_type}/${dataset}"
     label 'gpu_nnls'
-    publishDir "${params.output_path}/outputs_optimisation", mode: 'copy', overwrite: true, enabled: !params.cleanup_temp
+    publishDir "${params.output_path}/outputs_optimisation", mode: 'copy', overwrite: true, enabled: !params.cleanup_temp.toString().toBoolean()
 
     input:
     tuple val(dataset), val(mutation_type), path("simulated_tables/SIM_${dataset}/*"), path(weak_thresholds_file), path(strong_thresholds_file)
@@ -94,7 +95,7 @@ process run_optimized_NNLS {
 process run_bootstrap_NNLS {
     tag "${mutation_type}/${dataset}/${chunk[0]}"
     label 'gpu_nnls'
-    publishDir "${params.output_path}/outputs_optimisation", enabled: !params.cleanup_temp
+    publishDir "${params.output_path}/outputs_optimisation", enabled: !params.cleanup_temp.toString().toBoolean()
 
     input:
     tuple val(dataset), val(mutation_type), path("simulated_tables/SIM_${dataset}/*"), path(weak_thresholds_file), path(strong_thresholds_file)
@@ -135,7 +136,7 @@ process run_final_NNLS {
     path "${dataset}/gpu_provenance.json", optional: true, emit: gpu_provenance
 
     script:
-    def optimised_flag = params.optimised ? "-x" : ""
+    def optimised_flag = params.optimised.toString().toBoolean() ? "-x" : ""
     """
     run_NNLS.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \\
         --optimisation_strategy ${params.optimisation_strategy} \\
@@ -148,7 +149,7 @@ process run_final_NNLS {
 process run_final_bootstrap_NNLS {
     tag "${mutation_type}/${dataset}/${chunk[0]}"
     label 'gpu_nnls'
-    publishDir "${params.output_path}/output_tables", mode: 'copy', overwrite: true, enabled: !params.cleanup_temp
+    publishDir "${params.output_path}/output_tables", mode: 'copy', overwrite: true, enabled: !params.cleanup_temp.toString().toBoolean()
 
     input:
     tuple val(dataset), val(mutation_type), path(weak_penalty), path(strong_penalty)
@@ -163,7 +164,7 @@ process run_final_bootstrap_NNLS {
     script:
     def start_index = chunk[0]
     def n_per_task = chunk[1]
-    def optimised_flag = params.optimised ? "-x" : ""
+    def optimised_flag = params.optimised.toString().toBoolean() ? "-x" : ""
     """
     run_NNLS.py -B --n_bootstrap ${n_per_task} --bootstrap_start_index ${start_index} \\
         -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \\

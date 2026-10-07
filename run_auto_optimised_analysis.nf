@@ -97,7 +97,18 @@ def is_positive_integer(value) {
     return value.toString().isInteger() && value.toString().toInteger() > 0
 }
 
+// Boolean params are read as params.<name>.toString().toBoolean() throughout: with Nextflow's
+// strict parser (the default from 26.04), values given on the command line stay strings, and
+// '--cleanup_temp false' gives 'false', which Groovy treats as true
 def validate_parameters(mutation_types) {
+    ['COSMIC_signatures', 'cleanup_temp', 'run_only_simulations', 'add_noise', 'run_only_optimisation', 'optimised',
+     'use_GPU', 'no_CI_for_penalties', 'calculate_penalty_on_average', 'plot_optimisation_plots',
+     'plot_bootstrap_attributions', 'plot_metrics', 'plot_signatures', 'plot_input_spectra', 'plot_fitted_spectra',
+     'plot_residuals', 'show_poisson_errors', 'show_strands', 'show_nontranscribed_region'].each { name ->
+        if (!(params[name].toString().trim().toLowerCase() in ['true', 'false'])) {
+            error "ERROR: ${name} must be true or false (got '${params[name]}')"
+        }
+    }
     // Threshold scan settings
     if (params.weak_thresholds.toString().trim() == 'auto' && params.optimisation_strategy != 'removal') {
         error "ERROR: weak_thresholds = 'auto' needs optimisation_strategy = 'removal' (got '${params.optimisation_strategy}'). Give an explicit list, e.g. --weak_thresholds 0,0.0001,0.0002,0.0003"
@@ -107,8 +118,10 @@ def validate_parameters(mutation_types) {
     }
     // The optimisation (unless only simulating) and the final attribution (unless only optimising)
     // need at least one bootstrap iteration
-    def bootstrap_counts_needed = [number_of_bootstrapped_samples_in_optimisation: !params.run_only_simulations,
-                                   number_of_bootstrapped_samples: !params.run_only_simulations && !params.run_only_optimisation]
+    def only_simulations = params.run_only_simulations.toString().toBoolean()
+    def only_optimisation = params.run_only_optimisation.toString().toBoolean()
+    def bootstrap_counts_needed = [number_of_bootstrapped_samples_in_optimisation: !only_simulations,
+                                   number_of_bootstrapped_samples: !only_simulations && !only_optimisation]
     bootstrap_counts_needed.each { name, needed ->
         if (needed && !is_positive_integer(params[name])) {
             error "ERROR: ${name} must be a positive integer (got '${params[name]}')"
@@ -212,7 +225,7 @@ workflow OPTIMISATION {
     def pairs = make_optimisation_bootstrap_tables.out.bundle.groupTuple(by: [0, 1])
     calculate_optimal_penalties(scan.join(pairs, by: [0, 1], failOnMismatch: true, failOnDuplicate: true), signature_files)
 
-    if (params.plot_optimisation_plots) {
+    if (params.plot_optimisation_plots.toString().toBoolean()) {
         def plot_inputs = scan
             .map { dataset, mutation_type, _simulated_tables, weak, strong -> tuple(dataset, mutation_type, weak, strong) }
             .join(calculate_optimal_penalties.out.analysis, by: [0, 1], failOnMismatch: true, failOnDuplicate: true)
@@ -221,7 +234,7 @@ workflow OPTIMISATION {
     }
 
     emit:
-    penalties = calculate_optimal_penalties.out.penalties
+    calculate_optimal_penalties.out.penalties   // (dataset, mutation_type, optimal weak penalty, optimal strong penalty)
 }
 
 // Final attribution of the input data with the optimal penalties: central attribution,
@@ -249,24 +262,24 @@ workflow FINAL_ATTRIBUTION {
                 [truth_studies].flatten())
         }
 
-    if (params.plot_bootstrap_attributions) {
+    if (params.plot_bootstrap_attributions.toString().toBoolean()) {
         plot_bootstrap_attributions(results.map { dataset, mutation_type, tables, _truth_studies -> tuple(dataset, mutation_type, tables) },
             input_files, signature_files)
     }
-    if (params.plot_metrics) {
+    if (params.plot_metrics.toString().toBoolean()) {
         plot_metrics(results)
     }
-    if (params.plot_fitted_spectra) {
+    if (params.plot_fitted_spectra.toString().toBoolean()) {
         plot_fitted_spectra(run_final_NNLS.out.tables)
     }
-    if (params.plot_residuals) {
+    if (params.plot_residuals.toString().toBoolean()) {
         plot_residuals(run_final_NNLS.out.tables)
     }
 }
 
 workflow {
     print_banner()
-    if (params.help) {
+    if (params.help.toString().toBoolean()) {
         print_help()
         return
     }
@@ -325,10 +338,10 @@ workflow {
     // One (dataset, mutation type) key per mutation type: they run in parallel
     def keys = channel.fromList(mutation_types).map { mutation_type -> tuple(dataset, mutation_type) }
 
-    if (params.plot_signatures) {
+    if (params.plot_signatures.toString().toBoolean()) {
         plot_signatures(keys, signature_files)
     }
-    if (params.plot_input_spectra) {
+    if (params.plot_input_spectra.toString().toBoolean()) {
         plot_input_spectra(keys, input_files)
     }
 
@@ -336,10 +349,10 @@ workflow {
     run_unoptimized_NNLS(keys, input_files, signature_files)
     simulate_data(run_unoptimized_NNLS.out.mutations_table, signature_files, run_seed)
 
-    if (!params.run_only_simulations) {
+    if (!params.run_only_simulations.toString().toBoolean()) {
         OPTIMISATION(simulate_data.out.tables, signature_files, run_seed)
-        if (!params.run_only_optimisation) {
-            FINAL_ATTRIBUTION(OPTIMISATION.out.penalties, input_files, signature_files, run_seed)
+        if (!params.run_only_optimisation.toString().toBoolean()) {
+            FINAL_ATTRIBUTION(OPTIMISATION.out, input_files, signature_files, run_seed)
         }
     }
 }

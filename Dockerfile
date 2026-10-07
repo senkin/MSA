@@ -17,7 +17,7 @@ LABEL maintainer="s.senkin@gmail.com"
 
 
 ############# SYSTEM DEPENDENCIES #################
-# Install Java 17 (JRE+JDK) and curl before Nextflow
+# Install Java 17 (JRE+JDK; Nextflow 26.04 runs on Java 17 to 26) and curl before Nextflow
 ENV DEBIAN_FRONTEND=noninteractive
 # (no 'apt-get upgrade': it would make every rebuild pull whatever updates exist that day)
 RUN apt-get -y update --allow-releaseinfo-change && \
@@ -34,7 +34,7 @@ ENV DEBIAN_FRONTEND=dialog
 ############ NEXTFLOW INSTALLATION ################
 # Install a fixed Nextflow release (self-contained -dist build, nothing downloaded at run
 # time) in a user-local directory
-ARG NXF_VER=25.04.8
+ARG NXF_VER=26.04.6
 ENV HOME=/root
 ENV NXF_VER=${NXF_VER}
 RUN mkdir -p $HOME/.local/bin && \

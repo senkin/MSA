@@ -1,6 +1,6 @@
 // modules/bootstrap_tables.nf
 
-include { signature_prefix; table_name } from './common'
+include { signature_prefix; table_name; list_args } from './common'
 
 // Bootstrap summary tables of one threshold pair of the optimisation (simulated data):
 // confidence intervals, prevalences and the truth studies the penalty choice is based on.
@@ -8,7 +8,7 @@ include { signature_prefix; table_name } from './common'
 // studies and the central attribution tables), hard-linked where possible, not published.
 process make_optimisation_bootstrap_tables {
     tag "${mutation_type}/${dataset}/${suffix}"
-    publishDir "${params.output_path}/outputs_optimisation", enabled: !params.cleanup_temp,
+    publishDir "${params.output_path}/outputs_optimisation", enabled: !params.cleanup_temp.toString().toBoolean(),
         saveAs: { f -> f.startsWith('bundle/') ? null : f }
 
     input:
@@ -29,7 +29,7 @@ process make_optimisation_bootstrap_tables {
     make_bootstrap_tables.py -d SIM_${dataset} -t ${mutation_type} -p ${signature_prefix()} \\
         --suffix ${suffix} -l ${params.confidence_level} \\
         -c ${params.SBS_context} -S signature_tables \\
-        -T ${params.signature_attribution_thresholds.join(' ')} \\
+        -T ${list_args(params.signature_attribution_thresholds)} \\
         -i attributions -o "./" -n ${num_bootstrap_samples}
 
     mkdir -p bundle/${pair}
@@ -47,7 +47,7 @@ process make_bootstrap_tables {
     tag "${mutation_type}/${dataset}"
     // the bootstrap distributions per sample/signature (JSON) are intermediate files
     publishDir "${params.output_path}/output_tables", mode: 'copy', overwrite: true,
-        saveAs: { f -> (params.cleanup_temp && f ==~ /[^\/]+\/[^\/]+\.json/) ? null : f }
+        saveAs: { f -> (params.cleanup_temp.toString().toBoolean() && f ==~ /[^\/]+\/[^\/]+\.json/) ? null : f }
 
     input:
     tuple val(dataset), val(mutation_type), path("attributions/${dataset}/*"), path("attributions/${dataset}/bootstrap_output/*")
@@ -77,7 +77,7 @@ process make_bootstrap_tables {
 
     make_bootstrap_tables.py -d ${dataset} -t ${mutation_type} -p ${signature_prefix()} \\
         -c ${params.SBS_context} -S signature_tables -l ${params.confidence_level} \\
-        -T ${params.signature_attribution_thresholds.join(' ')} \\
+        -T ${list_args(params.signature_attribution_thresholds)} \\
         -i attributions -o "./" -n ${num_bootstrap_samples}
 
     # the truth table is kept with the results (and the plots read it from there)

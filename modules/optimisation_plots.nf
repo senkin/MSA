@@ -1,6 +1,6 @@
 // modules/optimisation_plots.nf
 
-include { signature_prefix } from './common'
+include { signature_prefix; list_args } from './common'
 
 // Metric heatmaps and confidence probability curves of the threshold scan of a mutation type
 process plot_optimisation_plots {
@@ -26,7 +26,7 @@ process plot_optimisation_plots {
         -l ${params.metric_threshold} \\
         -W \$(cat ${weak_thresholds_file}) \\
         -S \$(cat ${strong_thresholds_file}) \\
-        -T ${params.signature_attribution_thresholds.join(' ')} \\
+        -T ${list_args(params.signature_attribution_thresholds)} \\
         --signature_path signature_tables \\
         -p ${signature_prefix()}
     """
