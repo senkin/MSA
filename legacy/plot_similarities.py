@@ -3,6 +3,9 @@ import copy
 import pandas as pd
 import numpy as np
 from scipy.spatial import distance
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'bin'))
 from common_methods import calculate_similarity
 import matplotlib.pyplot as plt
 
