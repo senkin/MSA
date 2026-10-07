@@ -94,6 +94,16 @@ if (params.weak_thresholds.toString().trim() == 'auto' && params.optimisation_st
 if (!(params.threshold_scan in ['trajectory', 'separate'])) {
     error "ERROR: threshold_scan must be 'trajectory' or 'separate' (got '${params.threshold_scan}')"
 }
+// The optimisation (unless only simulating) and the final attribution (unless only optimising)
+// need at least one bootstrap iteration
+def is_positive_integer(value) { value.toString().isInteger() && value.toString().toInteger() > 0 }
+def bootstrap_counts_needed = [number_of_bootstrapped_samples_in_optimisation: !params.run_only_simulations,
+                               number_of_bootstrapped_samples: !params.run_only_simulations && !params.run_only_optimisation]
+bootstrap_counts_needed.each { name, needed ->
+    if (needed && !is_positive_integer(params[name])) {
+        error "ERROR: ${name} must be a positive integer (got '${params[name]}')"
+    }
+}
 
 // Validate parameters when using specific file inputs
 if (params.input_mutation_table || params.signatures_file) {

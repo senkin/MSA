@@ -8,8 +8,10 @@ def gpu_flag = params.use_GPU ? "--use_gpu --gpu_precision ${params.gpu_precisio
 // Split bootstrap iterations 1..n into [start_index, n_iterations] chunks, one chunk per task.
 // run_NNLS.py seeds every iteration from (seed, index), so results do not depend on the split.
 // chunk_size <= 0 keeps the mode default: one iteration per task on CPU (maximum scheduler
-// width), all iterations in a single task on GPU (one reused CUDA context).
+// width), all iterations in a single task on GPU (one reused CUDA context). No chunks (no
+// tasks) for n < 1, which the main script only allows where the bootstrap is not run.
 def bootstrap_chunks(n, chunk_size) {
+    if ((n as int) < 1) return []
     int size = (chunk_size ?: 0) > 0 ? chunk_size as int : (params.use_GPU ? n as int : 1)
     return (1..n).step(size).collect { start -> [start, Math.min(size, (n as int) - start + 1)] }
 }

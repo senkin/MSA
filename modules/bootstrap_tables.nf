@@ -89,22 +89,17 @@ workflow FINAL_BOOTSTRAP_TABLES_workflow {
         
         script:
         def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
+        def table = [SBS: "${params.SBS_context}", DBS: 'dinucs', ID: 'indels'].get(mutation_type, mutation_type)
         """
         mkdir -p ${params.output_path}/output_tables/${dataset}
-        
-        # Copy simulation files if this is a simulated dataset
-        if [[ ${dataset} == *"SIM"* ]]; then
-            if [[ ${mutation_type} == "SBS" ]]; then
-                cp ${workflow.projectDir}/input_mutation_tables/${dataset}/WGS_${dataset}.${params.SBS_context}.weights.csv ${params.output_path}/output_tables/${dataset}/
-            elif [[ ${mutation_type} == "DBS" ]]; then
-                cp ${workflow.projectDir}/input_mutation_tables/${dataset}/WGS_${dataset}.dinucs.weights.csv ${params.output_path}/output_tables/${dataset}/
-            elif [[ ${mutation_type} == "ID" ]]; then
-                cp ${workflow.projectDir}/input_mutation_tables/${dataset}/WGS_${dataset}.indels.weights.csv ${params.output_path}/output_tables/${dataset}/
-            elif [[ ${mutation_type} == "SV" || ${mutation_type} == "CNV" ]]; then
-                cp ${workflow.projectDir}/input_mutation_tables/${dataset}/WGS_${dataset}.${mutation_type}.weights.csv ${params.output_path}/output_tables/${dataset}/
-            fi
+
+        # Simulated datasets come with their truth table (signature weights): when the staged
+        # inputs have one, make_bootstrap_tables.py scores the attribution against it
+        truth=${params.output_path}/temp/input_tables/${dataset}/WGS_${dataset}.${table}.weights.csv
+        if [[ -f "\$truth" ]]; then
+            cp "\$truth" ${params.output_path}/output_tables/${dataset}/
         fi
-        
+
         python ${workflow.projectDir}/bin/make_bootstrap_tables.py -d ${dataset} -t ${mutation_type} -p ${signature_prefix} \\
             -c ${params.SBS_context} -S ${params.output_path}/temp/signature_tables -l ${params.confidence_level} \\
             -T ${params.signature_attribution_thresholds.join(' ')} \\
