@@ -13,10 +13,14 @@ process {
         queue = 'gpu'                       // your GPU partition/queue
         clusterOptions = '--gres=gpu:1'     // SLURM: actually request a GPU
         // accelerator = 1                   // executor-agnostic alternative (k8s/cloud)
-
-        // Optional: cap the RMM pool (MiB), divided across processes sharing one GPU.
-        // Leave unset to default to 60% of total device memory (fine for one GPU job
-        // per device).
-        // env = [ 'RMM_POOL_SIZE_MIB': '40000' ]
     }
 }
+
+// Optional: cap the RMM pool (MiB), divided across processes sharing one GPU.
+// Leave unset to default to 60% of total device memory (fine for one GPU job
+// per device). It is set in the env scope, for all tasks of the GPU run (only the
+// GPU NNLS reads it): an `env` setting inside withLabel is not a directive, so
+// Nextflow warns about it and leaves the variable unset.
+// env {
+//     RMM_POOL_SIZE_MIB = '40000'
+// }
