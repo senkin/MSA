@@ -7,7 +7,7 @@ FROM condaforge/mambaforge:24.9.2-0@sha256:3b5f55c0b2f447cf94b8f67ca9094f9d2a9d3
 LABEL base_image="condaforge/mambaforge"
 LABEL version="24.9.2-0"
 LABEL software="MSA"
-LABEL software.version="3.0"
+LABEL software.version="4.0"
 LABEL about.summary="Container image containing all requirements for MSA nextflow pipeline"
 LABEL about.home="https://gitlab.com/s.senkin/MSA/"
 LABEL about.documentation="https://gitlab.com/s.senkin/MSA/README.md"
@@ -33,16 +33,14 @@ ENV DEBIAN_FRONTEND=dialog
 
 ############ NEXTFLOW INSTALLATION ################
 # Install a fixed Nextflow release (self-contained -dist build, nothing downloaded at run
-# time) in a user-local directory
+# time) in /usr/local/bin, on the PATH of every user: Apptainer/Singularity run the image as
+# the calling user, with their own home mounted over /root (which is private in the image)
 ARG NXF_VER=26.04.6
-ENV HOME=/root
 ENV NXF_VER=${NXF_VER}
-RUN mkdir -p $HOME/.local/bin && \
-    curl -fsSL -o $HOME/.local/bin/nextflow \
+RUN curl -fsSL -o /usr/local/bin/nextflow \
         https://github.com/nextflow-io/nextflow/releases/download/v${NXF_VER}/nextflow-${NXF_VER}-dist && \
-    chmod +x $HOME/.local/bin/nextflow && \
-    $HOME/.local/bin/nextflow -version
-ENV PATH="$HOME/.local/bin:${PATH}"
+    chmod 755 /usr/local/bin/nextflow && \
+    nextflow -version
 
 ############# MSA ENV INSTALLATION ################
 # Exact lock of environment.yml for the image's architecture (see conda-lock/)
