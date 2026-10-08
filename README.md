@@ -282,7 +282,8 @@ nextflow run legacy/run_analysis.nf -profile conda \
 
 ### Using resume
 
-The pipeline partially supports Nextflow's `-resume` functionality to restart from cached processes:
+Nextflow's `-resume` restarts a run from its cached tasks: unchanged tasks are not run again, and
+their results are published again (also if the output folder was deleted in between):
 
 ```bash
 nextflow run run_auto_optimised_analysis.nf -profile conda -resume \
@@ -354,15 +355,13 @@ nextflow run run_auto_optimised_analysis.nf -profile conda \
     --output_path results
 ```
 
-### Multiple mutation types (must be set in script)
-Edit `run_auto_optimised_analysis.nf`:
-```groovy
-params.mutation_types = ['SBS', 'DBS', 'ID']
-```
-Then run:
+### Multiple mutation types
+Mutation types run in parallel. Give them comma-separated on the command line, or as a list in
+your config (`params.mutation_types = ['SBS', 'DBS', 'ID']`):
 ```bash
 nextflow run run_auto_optimised_analysis.nf -profile conda \
     --dataset my_data \
+    --mutation_types SBS,DBS,ID \
     --output_path results
 ```
 
