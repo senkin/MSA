@@ -965,10 +965,26 @@ def add_strong_signatures(observed, norm_obs, sig_values, active_cols, candidate
     return active_cols, final_similarity
 
 
+# The addition strategies start from these signatures, those of them in the signature
+# table, and otherwise from the table's first signature
+ADDITION_START_SIGNATURES = ('SBS1', 'SBS5')
+
+
+def addition_start_signatures(signature_names):
+    """Signatures the 'addition' and 'add-remove' strategies start from: SBS1 and SBS5
+    where available, otherwise the first signature listed."""
+    start = [name for name in signature_names if name in ADDITION_START_SIGNATURES]
+    return start or list(signature_names[:1])
+
+
 def optimise_signatures(selected_mutations, initial_signatures, all_available_signatures,
                        strategy='removal', weak_threshold=0.01, strong_threshold=0.05,
                        similarity_index=-3, loops_limit=100, verbose=False):
     """Optimise the signature set for one sample.
+
+    'removal' starts from initial_signatures and removes the weak ones; 'addition' starts
+    from addition_start_signatures() of them and adds the strong ones among them;
+    'add-remove' starts there too and alternates addition and removal until convergence.
 
     The candidate search runs entirely on numpy arrays / integer column indices
     and evaluates a single similarity metric per NNLS solve (see
@@ -983,9 +999,12 @@ def optimise_signatures(selected_mutations, initial_signatures, all_available_si
     all_names = list(all_available_signatures.columns)
     name_to_col = {name: i for i, name in enumerate(all_names)}
     sig_values = np.asarray(all_available_signatures.values, dtype=float)
-    candidate_cols = list(range(len(all_names)))
+    candidate_cols = [name_to_col[name] for name in initial_signatures.columns]
 
-    active_cols = [name_to_col[name] for name in initial_signatures.columns]
+    if strategy in ('addition', 'add-remove'):
+        active_cols = [name_to_col[name] for name in addition_start_signatures(list(initial_signatures.columns))]
+    else:
+        active_cols = list(candidate_cols)
 
     if not active_cols:
         return all_available_signatures.iloc[:, :0]

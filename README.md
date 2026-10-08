@@ -97,7 +97,9 @@ The pipeline processes inputs in the following priority order:
 | --seed | null | RNG seed for the simulations and bootstrap resampling. If unset, a seed is derived from the Nextflow session ID; the seed used is always recorded in `pipeline_info/` (see [Reproducibility](#reproducibility)) |
 | --bootstrap_chunk_size | 0 | Bootstrap iterations per job. 0: one per job on CPU, all in one job on GPU. Results do not depend on it |
 | --bootstrap_method | binomial | Bootstrap resampling: `binomial`, `multinomial`, `multinomial_weight`, `poisson`, `classic` (mutation channels resampled with replacement) or `bootstrap_residuals` (residuals of the central fit resampled across channels and added back to it) |
+| --optimisation_strategy | removal | `removal`: start from all signatures and remove the weak ones; `addition`: start from SBS1 and SBS5 (those in the signature table, otherwise its first signature) and add the strong ones; `add-remove`: from the same start, alternate addition and removal. See [Penalty scan](#penalty-scan) |
 | --weak_thresholds | auto | Weak penalties scanned in the optimisation: `auto`, or an explicit list (config list, or comma-separated on the command line, e.g. `0,0.0001,0.0002,0.0003`). See [Penalty scan](#penalty-scan) |
+| --strong_thresholds | [0] | Strong penalties scanned (similarity increase needed to add a signature), used by `addition` and `add-remove`; same formats as `--weak_thresholds`, except `auto` |
 | --auto_weak_thresholds_number | 12 | Number of non-zero penalties chosen by `auto` (0 is always included) |
 | --auto_weak_thresholds_samples | 300 | Simulated samples whose removal trajectories choose the `auto` penalties (-1: all) |
 | --threshold_scan | trajectory | `trajectory`: one greedy removal per sample, replayed at every penalty (identical results); `separate`: one removal per penalty, as before |
@@ -219,6 +221,13 @@ and picks the one that best meets the chosen metric (`metric_to_prioritise`, `me
 * **Explicit ranges** work as before, e.g. `weak_thresholds = [0, 0.0001, 0.0002, 0.0003]` in the
   config or `--weak_thresholds 0,0.0001,0.0002,0.0003`, and give the same results as before.
   `auto` requires the removal strategy; other strategies need an explicit list.
+* **Addition strategies.** `optimisation_strategy = "addition"` starts from SBS1 and SBS5 (those of
+  them in the signature table, otherwise its first signature) and adds, one at a time, the signature
+  that increases the similarity most, while the increase exceeds the strong penalty. `"add-remove"`
+  starts from the same signatures and alternates addition and removal until the similarity no longer
+  changes. Scan strong penalties with `strong_thresholds` (e.g. `--strong_thresholds 0.001,0.005,0.01`);
+  `addition` ignores the weak penalty, so a single weak value (e.g. `--weak_thresholds 0`) avoids
+  repeating identical runs.
 
 The penalties used are in `outputs_optimisation/SIM_<dataset>/<mutation type>/weak_thresholds.txt`.
 Each penalty still adds its own bootstrap output files and summary-table job, so very long lists
