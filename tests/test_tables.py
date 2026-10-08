@@ -128,6 +128,8 @@ class TruthStudiesTest(unittest.TestCase):
         np.testing.assert_allclose(upper, [[0.4, 0.5]])
         central_value, (cell_lower, cell_upper) = table.loc['s0', 'A']
         self.assertEqual((central_value, cell_lower, cell_upper), (0.3, 0, 0.4))
+        # written as plain numbers, readable with ast.literal_eval
+        self.assertEqual(str(table.loc['s0', 'A']), '[0.3, [0.0, 0.4]]')
 
     def test_CPs_for_thresholds(self):
         CPs = calculate_CPs_for_thresholds(self.LOWER, self.UPPER, self.TRUTH, ['s0', 's1'],

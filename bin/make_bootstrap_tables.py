@@ -140,12 +140,14 @@ def calculate_confidence_intervals(attributions, central_attribution, samples, s
     """
     lower, upper = calculate_confidence_interval(attributions, confidence=confidence_level * 100, axis=-1)
 
-    # central values keep the type of their column in the table
-    central = [central_attribution[signature].loc[samples].to_numpy() for signature in signatures]
+    # cells hold plain Python numbers, written as e.g. [0.15, [0.12, 0.17]] (numpy scalars
+    # would be written as np.float64(0.15)); central values keep the type of their column
+    central = [central_attribution[signature].loc[samples].tolist() for signature in signatures]
+    lower_values, upper_values = lower.tolist(), upper.tolist()
     cells = np.empty((len(samples), len(signatures)), dtype=object)
     for s in range(len(samples)):
         for g in range(len(signatures)):
-            cells[s, g] = [central[g][s], [lower[s, g], upper[s, g]]]
+            cells[s, g] = [central[g][s], [lower_values[s][g], upper_values[s][g]]]
 
     return pd.DataFrame(cells, index=samples, columns=signatures), lower, upper
 
