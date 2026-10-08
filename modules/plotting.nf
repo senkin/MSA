@@ -88,10 +88,12 @@ process plot_metrics {
     input:
     tuple val(dataset), val(mutation_type), path("attributions/${dataset}/*"), path("attributions/${dataset}/truth_studies/*", arity: '0..*')
 
+    // plot_metrics.py writes into the bootstrap_plots folder: signature_prevalences.pdf and,
+    // for simulated data, truth_studies/ (metrics and confidence probability curves)
     output:
-    path "*/*/metrics_plots/*.pdf", optional: true, emit: metrics_plots_level1
-    path "*/*/metrics_plots/*/*.pdf", optional: true, emit: metrics_plots_level2
-    path "*/*/metrics_plots/*/*/*.pdf", optional: true, emit: metrics_plots_level3
+    path "*/*/bootstrap_plots/signature_prevalences.pdf", optional: true, emit: prevalences_plot
+    path "*/*/bootstrap_plots/truth_studies/*.pdf", optional: true, emit: metrics_plots_level1
+    path "*/*/bootstrap_plots/truth_studies/*/*.pdf", optional: true, emit: metrics_plots_level2
 
     script:
     """
