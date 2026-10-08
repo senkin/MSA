@@ -79,7 +79,7 @@ The pipeline processes inputs in the following priority order:
 
 | Parameter | Default value | Description |
 |-----------|---------------|-------------|
-| --help | null | Print usage and optional parameters |
+| --help | false | Print usage and optional parameters |
 | --input_mutation_table | null | Specific mutation table file to convert and use (overrides all other inputs) |
 | --signatures_file | null | Specific signature file to convert and use (overrides all other inputs) |
 | --SP_matrix_generator_output_path | null | Use SigProfilerMatrixGenerator output from the specified path |

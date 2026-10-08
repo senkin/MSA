@@ -8,7 +8,7 @@ include { signature_prefix; table_name; list_args } from './common'
 // studies and the central attribution tables), hard-linked where possible, not published.
 process make_optimisation_bootstrap_tables {
     tag "${mutation_type}/${dataset}/${suffix}"
-    publishDir "${params.output_path}/outputs_optimisation", enabled: !params.cleanup_temp.toString().toBoolean(),
+    publishDir "${params.output_path}/outputs_optimisation", enabled: !params.cleanup_temp.toBoolean(),
         saveAs: { f -> f.startsWith('bundle/') ? null : f }
 
     input:
@@ -47,7 +47,7 @@ process make_bootstrap_tables {
     tag "${mutation_type}/${dataset}"
     // the bootstrap distributions per sample/signature (JSON) are intermediate files
     publishDir "${params.output_path}/output_tables", mode: 'copy', overwrite: true,
-        saveAs: { f -> (params.cleanup_temp.toString().toBoolean() && f ==~ /[^\/]+\/[^\/]+\.json/) ? null : f }
+        saveAs: { f -> (params.cleanup_temp.toBoolean() && f ==~ /[^\/]+\/[^\/]+\.json/) ? null : f }
 
     input:
     tuple val(dataset), val(mutation_type), path("attributions/${dataset}/*"), path("attributions/${dataset}/bootstrap_output/*")

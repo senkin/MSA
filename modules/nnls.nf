@@ -11,7 +11,7 @@ include { signature_prefix; gpu_flag; table_name; list_args } from './common'
 // Unoptimised attribution of the input data, whose signature activities seed the simulations
 process run_unoptimized_NNLS {
     tag "${mutation_type}/${dataset}"
-    publishDir "${params.output_path}/temp/output_tables_unoptimised", mode: 'copy', overwrite: true, enabled: !params.cleanup_temp.toString().toBoolean()
+    publishDir "${params.output_path}/temp/output_tables_unoptimised", mode: 'copy', overwrite: true, enabled: !params.cleanup_temp.toBoolean()
 
     input:
     tuple val(dataset), val(mutation_type)
@@ -62,7 +62,7 @@ process resolve_thresholds {
 process run_optimized_NNLS {
     tag "${mutation_type}/${dataset}"
     label 'gpu_nnls'
-    publishDir "${params.output_path}/outputs_optimisation", mode: 'copy', overwrite: true, enabled: !params.cleanup_temp.toString().toBoolean()
+    publishDir "${params.output_path}/outputs_optimisation", mode: 'copy', overwrite: true, enabled: !params.cleanup_temp.toBoolean()
 
     input:
     tuple val(dataset), val(mutation_type), path("simulated_tables/SIM_${dataset}/*"), path(weak_thresholds_file), path(strong_thresholds_file)
@@ -95,7 +95,7 @@ process run_optimized_NNLS {
 process run_bootstrap_NNLS {
     tag "${mutation_type}/${dataset}/${chunk[0]}"
     label 'gpu_nnls'
-    publishDir "${params.output_path}/outputs_optimisation", enabled: !params.cleanup_temp.toString().toBoolean()
+    publishDir "${params.output_path}/outputs_optimisation", enabled: !params.cleanup_temp.toBoolean()
 
     input:
     tuple val(dataset), val(mutation_type), path("simulated_tables/SIM_${dataset}/*"), path(weak_thresholds_file), path(strong_thresholds_file)
@@ -136,7 +136,7 @@ process run_final_NNLS {
     path "${dataset}/gpu_provenance.json", optional: true, emit: gpu_provenance
 
     script:
-    def optimised_flag = params.optimised.toString().toBoolean() ? "-x" : ""
+    def optimised_flag = params.optimised.toBoolean() ? "-x" : ""
     """
     run_NNLS.py -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \\
         --optimisation_strategy ${params.optimisation_strategy} \\
@@ -149,7 +149,7 @@ process run_final_NNLS {
 process run_final_bootstrap_NNLS {
     tag "${mutation_type}/${dataset}/${chunk[0]}"
     label 'gpu_nnls'
-    publishDir "${params.output_path}/output_tables", mode: 'copy', overwrite: true, enabled: !params.cleanup_temp.toString().toBoolean()
+    publishDir "${params.output_path}/output_tables", mode: 'copy', overwrite: true, enabled: !params.cleanup_temp.toBoolean()
 
     input:
     tuple val(dataset), val(mutation_type), path(weak_penalty), path(strong_penalty)
@@ -164,7 +164,7 @@ process run_final_bootstrap_NNLS {
     script:
     def start_index = chunk[0]
     def n_per_task = chunk[1]
-    def optimised_flag = params.optimised.toString().toBoolean() ? "-x" : ""
+    def optimised_flag = params.optimised.toBoolean() ? "-x" : ""
     """
     run_NNLS.py -B --n_bootstrap ${n_per_task} --bootstrap_start_index ${start_index} \\
         -d ${dataset} -t ${mutation_type} -c ${params.SBS_context} ${optimised_flag} \\

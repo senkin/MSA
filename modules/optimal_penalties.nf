@@ -17,8 +17,8 @@ process calculate_optimal_penalties {
     tuple val(dataset), val(mutation_type), path("SIM_${dataset}/${mutation_type}/*.*"), emit: analysis   // tables (csv, json)
 
     script:
-    def no_CI_for_penalties_flag = params.no_CI_for_penalties.toString().toBoolean() ? "--no_CI" : ""
-    def calculate_penalty_on_average_flag = params.calculate_penalty_on_average.toString().toBoolean() ? "--average" : ""
+    def no_CI_for_penalties_flag = params.no_CI_for_penalties.toBoolean() ? "--no_CI" : ""
+    def calculate_penalty_on_average_flag = params.calculate_penalty_on_average.toBoolean() ? "--average" : ""
     def prioritised_signatures_flag = params.signatures_to_prioritise ? "--signatures_to_prioritise " + list_args(params.signatures_to_prioritise) : ''
     def deprioritised_signatures_flag = params.signatures_to_deprioritise ? "--signatures_to_deprioritise " + list_args(params.signatures_to_deprioritise) : ''
     """

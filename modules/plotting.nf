@@ -6,9 +6,9 @@
 
 include { signature_prefix } from './common'
 
-def strands_flag() { return params.show_strands.toString().toBoolean() ? "-b" : '' }
-def nontranscribed_flag() { return params.show_nontranscribed_region.toString().toBoolean() ? "-n" : '' }
-def error_flag() { return params.show_poisson_errors.toString().toBoolean() ? "-e" : '' }
+def strands_flag() { return params.show_strands.toBoolean() ? "-b" : '' }
+def nontranscribed_flag() { return params.show_nontranscribed_region.toBoolean() ? "-n" : '' }
+def error_flag() { return params.show_poisson_errors.toBoolean() ? "-e" : '' }
 
 process plot_signatures {
     tag "${mutation_type}/${dataset}/signatures"
