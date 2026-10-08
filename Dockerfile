@@ -1,11 +1,12 @@
 ################## BASE IMAGE #####################
-# pinned by digest (multi-arch index of the 24.9.2-0 tag), so rebuilds start from the same base
-FROM condaforge/mambaforge:24.9.2-0@sha256:3b5f55c0b2f447cf94b8f67ca9094f9d2a9d316a4506fd5aa915faaf37ae29d4
+# Miniforge3 26.7.2-0 (conda 26.7, mamba 2.9) on Ubuntu 24.04 LTS, the newest base conda-forge
+# publishes. Pinned by digest (multi-arch index of the tag), so rebuilds start from the same base
+FROM condaforge/miniforge3:26.7.2-0@sha256:569afc65b5338d35e276adf9a860025cd37a677659d19dcb71fc1d4c2063a94e
 
 ################## METADATA #######################
 
-LABEL base_image="condaforge/mambaforge"
-LABEL version="24.9.2-0"
+LABEL base_image="condaforge/miniforge3"
+LABEL version="26.7.2-0"
 LABEL software="MSA"
 LABEL software.version="4.0"
 LABEL about.summary="Container image containing all requirements for MSA nextflow pipeline"
