@@ -18,6 +18,8 @@ REPO = Path(__file__).resolve().parents[1]
 BIN = REPO / 'bin'
 sys.path.insert(0, str(BIN))
 from calculate_optimal_penalties import select_penalties  # noqa: E402
+from make_bootstrap_tables import (calculate_confidence_intervals, calculate_signature_CPs,  # noqa: E402
+                                   calculate_CPs_for_thresholds)
 import run_NNLS as R  # noqa: E402
 
 SIGNATURES = ['SBS1', 'SBS2', 'SBS3', 'SBS4', 'SBS5']  # sigTest SBS96 signatures
@@ -100,6 +102,50 @@ class BootstrapTablesTest(unittest.TestCase):
         self.assertAlmostEqual(cps.loc[0, 'Others'], (0.5 + 1 + 1) / 3)
         for name in ('stat_scores_tables_SBS.csv', 'sensitivity_thresholds_SBS.csv'):
             self.assertTrue((out / 'truth_studies' / name).exists(), name)
+        # summed over the signatures: truth minus the bootstrap mean / median, and minus the
+        # central attribution (e.g. s0: SBS2 0.5 - 0.2, SBS4 0 - 0.1)
+        difference = pd.read_csv(out / 'truth_studies/truth_and_measured_difference_SBS.csv', index_col=0)
+        np.testing.assert_allclose(difference['Truth - mean'], [0.2, 0.3, 0.3])
+        np.testing.assert_allclose(difference['Truth - median'], [0.2, 0.3, 0.3])
+        np.testing.assert_allclose(difference['Truth - NNLS'], 0, atol=1e-12)
+
+
+class TruthStudiesTest(unittest.TestCase):
+    """Confidence intervals and their coverage of the truth (make_bootstrap_tables.py)."""
+
+    # 2 samples x 3 signatures
+    LOWER = np.array([[0, 0.2, 0], [0, 0, 0.1]])
+    UPPER = np.array([[0.01, 0.3, 0], [0.2, 0, 0.3]])
+    TRUTH = np.array([[0.03, 0.5, 0], [0.1, 0.04, 0.2]])
+    SIGNATURES = ['A', 'B', 'C']
+
+    def test_confidence_intervals(self):
+        # 1 sample, 2 signatures, 4 bootstrap iterations
+        attributions = np.array([[[0.4, 0.4, 0, 0], [0.5, 0.5, 0.5, 0.5]]])
+        central = pd.DataFrame([[0.3, 0.5]], index=['s0'], columns=['A', 'B'])
+        table, lower, upper = calculate_confidence_intervals(attributions, central, ['s0'], ['A', 'B'], 0.95)
+        np.testing.assert_allclose(lower, [[0, 0.5]])
+        np.testing.assert_allclose(upper, [[0.4, 0.5]])
+        central_value, (cell_lower, cell_upper) = table.loc['s0', 'A']
+        self.assertEqual((central_value, cell_lower, cell_upper), (0.3, 0, 0.4))
+
+    def test_CPs_for_thresholds(self):
+        CPs = calculate_CPs_for_thresholds(self.LOWER, self.UPPER, self.TRUTH, ['s0', 's1'],
+                                           self.SIGNATURES, [0, 0.05])
+        # threshold 0: s0 A (0.03 above [0, 0.01]) and s1 B (0.04 above [0, 0]) are missed;
+        # s0 B is covered as CI and truth are both above zero
+        np.testing.assert_allclose(CPs[0].loc[0], [0.5, 0.5, 1])
+        # a CI from zero reaches up to the threshold: 0.03 and 0.04 are within 0.05
+        np.testing.assert_allclose(CPs[0.05].loc[0], [1, 1, 1])
+
+    def test_signature_CPs(self):
+        CPs = calculate_signature_CPs(self.LOWER, self.UPPER, self.TRUTH, ['s0', 's1'],
+                                      self.SIGNATURES, acting_signatures=['A', 'B'])
+        # A: covered in s1 only; B: never (no threshold here, 0.5 is outside [0.2, 0.3])
+        self.assertAlmostEqual(CPs.loc[0, 'A'], 0.5)
+        self.assertAlmostEqual(CPs.loc[0, 'B'], 0)
+        # Others pools the signatures absent from the simulation: C, covered in both samples
+        self.assertAlmostEqual(CPs.loc[0, 'Others'], 1)
 
 
 class SelectPenaltiesTest(unittest.TestCase):

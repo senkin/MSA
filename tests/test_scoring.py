@@ -35,6 +35,19 @@ class StatScoresTest(unittest.TestCase):
         self.assertAlmostEqual(accuracy, 6 / 9)
         self.assertAlmostEqual(F1, 6 / 9)
         self.assertAlmostEqual(MCC, (3 * 3 - 2 * 1) / math.sqrt(5 * 4 * 5 * 4))
+        # signatures may be given as a table whose columns name them (the signature table);
+        # number_of_samples counts the first samples only
+        self.assertEqual(calculate_stat_scores(pd.DataFrame(columns=signatures), reco, truth),
+                         (sensitivity, specificity, precision, accuracy, F1, MCC))
+        sensitivity, specificity = calculate_stat_scores(signatures, reco, truth, number_of_samples=2)[:2]
+        self.assertAlmostEqual(sensitivity, 2 / 3)
+        self.assertAlmostEqual(specificity, 2 / 3)
+
+    def test_invalid_values_raise(self):
+        truth = pd.DataFrame([[0.5, 0.5]], columns=['A', 'B'])
+        for bad in (-0.1, np.nan):
+            with self.assertRaises(ValueError):
+                calculate_stat_scores(['A', 'B'], pd.DataFrame([[0.5, bad]], columns=['A', 'B']), truth)
 
 
 class OptimalPenaltyTest(unittest.TestCase):

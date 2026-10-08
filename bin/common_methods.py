@@ -132,9 +132,9 @@ def plot_array_as_histogram(arrays, labels, title, bins=[0.01*k for k in range(1
     plt.savefig(savepath, transparent=True)
     plt.close()
 
-def calculate_confidence_interval(array, confidence=95):
-    # return np.percentile(array, [(100-confidence)/2, (100+confidence)/2])
-    return [np.percentile(array, (100-confidence)/2), np.percentile(array, (100+confidence)/2)]
+def calculate_confidence_interval(array, confidence=95, axis=None):
+    # lower and upper bounds, along an axis of a multidimensional array if given
+    return [np.percentile(array, (100-confidence)/2, axis=axis), np.percentile(array, (100+confidence)/2, axis=axis)]
 
 def calculate_similarity(first_sample, second_sample, metric='Cosine', normalise=False):
     """
@@ -235,35 +235,27 @@ def calculate_confusion_matrix(signatures, reco_table, truth_table, number_of_sa
     true_positives, true_negatives, false_positives, false_negatives: list of doubles
     -------
     """
-    true_positives = true_negatives = false_positives = false_negatives = 0
     assert len(reco_table) == len(truth_table)
-
-    true_positives_signatures = []
-    false_negatives_signatures = []
-    false_positives_signatures = []
 
     if not number_of_samples:
         number_of_samples = len(reco_table)
+    if number_of_samples > len(reco_table):
+        raise IndexError(f"{number_of_samples} samples requested, the tables have {len(reco_table)}")
 
-    for i in range(number_of_samples):
-        reco_sample = reco_table.iloc[i]
-        truth_sample = truth_table.iloc[i]
-        for sig in signatures:
-            if truth_sample[sig] > 0 and reco_sample[sig] > 0:
-                true_positives += 1
-                true_positives_signatures.append(truth_sample[sig])
-            elif truth_sample[sig] == 0 and reco_sample[sig] == 0:
-                true_negatives += 1
-            elif truth_sample[sig] > 0 and reco_sample[sig] == 0:
-                false_negatives += 1
-                false_negatives_signatures.append(truth_sample[sig])
-            elif truth_sample[sig] == 0 and reco_sample[sig] > 0:
-                false_positives += 1
-                false_positives_signatures.append(reco_sample[sig])
-            else:
-                raise ValueError(
-                    "Invalid signature attribution values -- please check the tables")
-    
+    # samples by position, signatures by name
+    signatures = list(signatures)
+    reco = reco_table[signatures].to_numpy(dtype=float)[:number_of_samples]
+    truth = truth_table[signatures].to_numpy(dtype=float)[:number_of_samples]
+
+    true_positives = int(np.sum((truth > 0) & (reco > 0)))
+    true_negatives = int(np.sum((truth == 0) & (reco == 0)))
+    false_negatives = int(np.sum((truth > 0) & (reco == 0)))
+    false_positives = int(np.sum((truth == 0) & (reco > 0)))
+    # negative or missing (NaN) values fall in none of the four
+    if true_positives + true_negatives + false_negatives + false_positives != truth.size:
+        raise ValueError(
+            "Invalid signature attribution values -- please check the tables")
+
     return true_positives, true_negatives, false_positives, false_negatives
 
 def calculate_stat_scores(signatures, reco_table, truth_table, number_of_samples = None):

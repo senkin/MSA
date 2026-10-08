@@ -89,142 +89,104 @@ def calculate_sensitivity_thresholds(signatures_CPs_dict, signatures_to_consider
 ATTRIBUTION_SCALES = {'weights': 'weights', 'abs_mutations': 'abs'}
 
 
-def process_bootstrap_samples(number_of_b_samples, bootstrap_files, samples,
-                              signatures_to_consider, stat_metrics):
+def read_bootstrap_tables(number_of_b_samples, bootstrap_files, samples,
+                          signatures_to_consider, stat_metrics):
     """
-    Process all bootstrap samples in a single pass, reading BOTH the relative
-    (weights) and absolute (mutation-count) bootstrap tables so that downstream
-    confidence intervals and attribution distributions can be produced on both
-    scales without re-reading the bootstrap files.
+    Read every bootstrap iteration once: BOTH the relative (weights) and absolute
+    (mutation-count) attribution tables, so that confidence intervals and attribution
+    distributions can be produced on both scales, and the stat metrics.
 
     Returns:
-        attributions_per_sample:    {scale: {sample: DataFrame(iter x signatures)}}
-        attributions_per_signature: {scale: {signature: DataFrame(iter x samples)}}
-        stat_metrics_dict:          {metric: DataFrame(iter x samples)}  (scale-independent)
-    where scale is one of ATTRIBUTION_SCALES ('weights', 'abs_mutations').
+        attributions: {scale: array of shape (samples, signatures, iterations)}
+        stat_values:  array of shape (samples, stat metrics, iterations)
+    where scale is one of ATTRIBUTION_SCALES ('weights', 'abs_mutations'). The iterations of
+    each sample and signature are contiguous, so the statistics over them are computed exactly
+    as over a single array of values.
     """
-    # Initialize per-scale dictionaries with pre-allocated DataFrames
-    attributions_per_sample = {
-        scale: {
-            sample: pd.DataFrame(
-                index=range(number_of_b_samples),
-                columns=signatures_to_consider,
-                dtype=float
-            ) for sample in samples
-        } for scale in ATTRIBUTION_SCALES
-    }
+    attributions = {scale: np.empty((len(samples), len(signatures_to_consider), number_of_b_samples))
+                    for scale in ATTRIBUTION_SCALES}
+    stat_values = np.empty((len(samples), len(stat_metrics), number_of_b_samples))
 
-    attributions_per_signature = {
-        scale: {
-            sig: pd.DataFrame(
-                index=range(number_of_b_samples),
-                columns=samples,
-                dtype=float
-            ) for sig in signatures_to_consider
-        } for scale in ATTRIBUTION_SCALES
-    }
-
-    stat_metrics_dict = {
-        metric: pd.DataFrame(
-            index=range(number_of_b_samples),
-            columns=samples,
-            dtype=float
-        ) for metric in stat_metrics
-    }
-
-    # Process each bootstrap sample (read both scales + stats once per iteration)
     for i in range(number_of_b_samples):
-        attr_tables = {
-            scale: pd.read_csv(bootstrap_files[file_key](i + 1), index_col=0)
-            for scale, file_key in ATTRIBUTION_SCALES.items()
-        }
-        stat_table = pd.read_csv(bootstrap_files['stat'](i+1), index_col=0)
+        for scale, file_key in ATTRIBUTION_SCALES.items():
+            table = pd.read_csv(bootstrap_files[file_key](i + 1), index_col=0)
+            attributions[scale][:, :, i] = table.loc[samples, signatures_to_consider].to_numpy(dtype=float)
+        stat_table = pd.read_csv(bootstrap_files['stat'](i + 1), index_col=0)
+        # a sample missing from a stat table gets NaN metrics
+        stat_values[:, :, i] = stat_table[stat_metrics].reindex(samples).to_numpy(dtype=float)
 
-        for scale in ATTRIBUTION_SCALES:
-            bootstrap_attr = attr_tables[scale]
-            for sample in samples:
-                attributions_per_sample[scale][sample].loc[i] = bootstrap_attr.loc[sample]
-            for signature in signatures_to_consider:
-                attributions_per_signature[scale][signature].loc[i] = bootstrap_attr[signature]
-
-        for metric in stat_metrics:
-            stat_metrics_dict[metric].loc[i] = stat_table[metric]
-
-    return attributions_per_sample, attributions_per_signature, stat_metrics_dict
+    return attributions, stat_values
 
 
-def calculate_confidence_intervals_vectorized(attributions_per_sample, central_attribution,
-                                              samples, signatures, confidence_level):
-    """Calculate confidence intervals for all samples and signatures."""
-    confidence_intervals = pd.DataFrame(index=samples, columns=signatures, dtype=object)
-    
-    for sample in samples:
-        for signature in signatures:
-            ci = calculate_confidence_interval(
-                attributions_per_sample[sample][signature], 
-                confidence=confidence_level * 100
-            )
-            central_value = central_attribution.loc[sample, signature]
-            confidence_intervals.loc[sample, signature] = [central_value, ci]
-    
-    return confidence_intervals
+def distributions_per_sample(attributions, samples, signatures):
+    """{sample: DataFrame(iterations x signatures)} of a (samples, signatures, iterations) array"""
+    return {sample: pd.DataFrame(attributions[s].T, columns=signatures)
+            for s, sample in enumerate(samples)}
 
 
-def calculate_signature_CPs(confidence_intervals, truth_attribution_table, samples, 
-                           signatures_to_consider, acting_signatures):
-    """Calculate signature confidence probabilities."""
-    signatures_CPs = pd.DataFrame(index=samples, columns=signatures_to_consider, dtype=float)
+def distributions_per_column(values, samples, columns):
+    """{column: DataFrame(iterations x samples)} of a (samples, columns, iterations) array,
+    e.g. per signature or per stat metric"""
+    return {column: pd.DataFrame(values[:, c, :].T, columns=samples)
+            for c, column in enumerate(columns)}
 
-    for sample in samples:
-        others_covered = []
-        for signature in signatures_to_consider:
-            # Add signature to truth table if not present
-            if signature not in truth_attribution_table.columns:
-                truth_attribution_table[signature] = 0
 
-            lower, upper = confidence_intervals.loc[sample, signature][1]
-            truth_value = truth_attribution_table.loc[sample, signature]
+def calculate_confidence_intervals(attributions, central_attribution, samples, signatures,
+                                   confidence_level):
+    """
+    Confidence intervals for all samples and signatures from bootstrap attributions of shape
+    (samples, signatures, iterations). Returns the table of [central value, [lower, upper]]
+    cells, and the lower and upper bounds as (samples, signatures) arrays.
+    """
+    lower, upper = calculate_confidence_interval(attributions, confidence=confidence_level * 100, axis=-1)
 
-            if signature in acting_signatures:
-                signatures_CPs.loc[sample, signature] = int(lower <= truth_value <= upper)
-            else:
-                others_covered.append(int(lower <= truth_value <= upper))
-        if others_covered:
-            # pooled over all signatures absent from the simulation
-            signatures_CPs.loc[sample, 'Others'] = np.mean(others_covered)
-    
+    # central values keep the type of their column in the table
+    central = [central_attribution[signature].loc[samples].to_numpy() for signature in signatures]
+    cells = np.empty((len(samples), len(signatures)), dtype=object)
+    for s in range(len(samples)):
+        for g in range(len(signatures)):
+            cells[s, g] = [central[g][s], [lower[s, g], upper[s, g]]]
+
+    return pd.DataFrame(cells, index=samples, columns=signatures), lower, upper
+
+
+def calculate_signature_CPs(lower, upper, truth, samples, signatures_to_consider, acting_signatures):
+    """
+    Signature confidence probabilities: the fraction of samples whose confidence interval
+    contains the truth, per acting signature, and pooled over the signatures absent from the
+    simulation ('Others'). lower, upper and truth are (samples, signatures) arrays.
+    """
+    covered = (lower <= truth) & (truth <= upper)
+    acting = np.array([signature in acting_signatures for signature in signatures_to_consider], dtype=bool)
+
+    signatures_CPs = {signature: np.where(acting[g], covered[:, g], np.nan)
+                      for g, signature in enumerate(signatures_to_consider)}
+    if not acting.all():
+        # pooled over all signatures absent from the simulation
+        signatures_CPs['Others'] = covered[:, ~acting].mean(axis=1)
+    signatures_CPs = pd.DataFrame(signatures_CPs, index=samples)
+
     # Calculate overall CPs
     return signatures_CPs.sum(axis=0).to_frame().T / len(samples)
 
 
-def calculate_CPs_for_thresholds(confidence_intervals, truth_attribution_table, samples,
-                                 signatures_to_consider, thresholds):
-    """Calculate CPs for different sensitivity thresholds."""
+def calculate_CPs_for_thresholds(lower, upper, truth, samples, signatures_to_consider, thresholds):
+    """Calculate CPs for different sensitivity thresholds (lower, upper and truth as in
+    calculate_signature_CPs)."""
     signatures_CPs_dict = {}
-    
+
     for threshold in thresholds:
-        CPs = pd.DataFrame(index=samples, columns=signatures_to_consider, dtype=float)
-        
-        for sample in samples:
-            for signature in signatures_to_consider:
-                lower, upper = confidence_intervals.loc[sample, signature][1]
-                truth_value = truth_attribution_table.loc[sample, signature]
-                
-                # Adjust upper bound if needed
-                if lower == 0 and upper < threshold:
-                    upper = threshold
-                
-                # Check if CI contains truth or both are positive
-                if lower <= truth_value <= upper:
-                    CPs.loc[sample, signature] = 1
-                elif lower > 0 and upper > 0 and truth_value > 0:
-                    CPs.loc[sample, signature] = 1
-                else:
-                    CPs.loc[sample, signature] = 0
-        
+        # a confidence interval from zero reaches up to the threshold at least
+        upper_bound = np.where((lower == 0) & (upper < threshold), threshold, upper)
+
+        # covered if the CI contains the truth, or if both are positive
+        covered = ((lower <= truth) & (truth <= upper_bound)) | \
+                  ((lower > 0) & (upper_bound > 0) & (truth > 0))
+        CPs = pd.DataFrame(covered.astype(float), index=samples, columns=signatures_to_consider)
+
         # Normalize to get probabilities
         signatures_CPs_dict[threshold] = CPs.sum(axis=0).to_frame().T / len(samples)
-    
+
     return signatures_CPs_dict
 
 
@@ -343,39 +305,39 @@ def main():
         ]
 
     print('Processing bootstrap samples...')
-    # Process all bootstrap samples once, reading both relative and absolute tables
-    attributions_per_sample_by_scale, attributions_per_signature_by_scale, stat_metrics_dict = \
-        process_bootstrap_samples(
-            args.number_of_b_samples,
-            bootstrap_files,
-            samples,
-            signatures_to_consider,
-            stat_metrics
-        )
+    # Read all bootstrap samples once, both relative and absolute tables
+    attributions_by_scale, stat_values = read_bootstrap_tables(
+        args.number_of_b_samples,
+        bootstrap_files,
+        samples,
+        signatures_to_consider,
+        stat_metrics
+    )
+    stat_metrics_dict = distributions_per_column(stat_values, samples, stat_metrics)
 
     print(f'Bootstrap processing complete. Elapsed: {datetime.now() - start_time}')
 
     # Confidence intervals and attribution distributions, written for BOTH scales
     print('Calculating confidence intervals...')
-    confidence_intervals_by_scale = {}
+    CI_bounds_by_scale = {}
     for scale in ATTRIBUTION_SCALES:
-        ci = calculate_confidence_intervals_vectorized(
-            attributions_per_sample_by_scale[scale],
+        ci, lower, upper = calculate_confidence_intervals(
+            attributions_by_scale[scale],
             central_by_scale[scale],
             samples,
             signatures_to_consider,
             args.confidence_level
         )
-        confidence_intervals_by_scale[scale] = ci
+        CI_bounds_by_scale[scale] = (lower, upper)
 
         scale_filename = f'{args.dataset_name}_{args.mutation_type}_bootstrap_output_{scale}'
         ci.to_csv(f'{output_folder}/CIs_{scale_filename}.csv')
         write_data_to_JSON(
-            attributions_per_sample_by_scale[scale],
+            distributions_per_sample(attributions_by_scale[scale], samples, signatures_to_consider),
             f'{output_folder}/attributions_per_sample_{scale_filename}.json'
         )
         write_data_to_JSON(
-            attributions_per_signature_by_scale[scale],
+            distributions_per_column(attributions_by_scale[scale], samples, signatures_to_consider),
             f'{output_folder}/attributions_per_signature_{scale_filename}.json'
         )
         # stat metrics are scale-independent, but written under both names so the
@@ -388,8 +350,8 @@ def main():
     print(f'Confidence intervals calculated. Elapsed: {datetime.now() - start_time}')
 
     # The relative (weights) scale is canonical for pruning and the truth studies below
-    confidence_intervals = confidence_intervals_by_scale['weights']
-    attributions_per_sample = attributions_per_sample_by_scale['weights']
+    lower_CI, upper_CI = CI_bounds_by_scale['weights']
+    attributions = attributions_by_scale['weights']
     central_attribution = central_attr_weights
 
     # Pruned attribution: prune on the CI lower bound, emit absolute counts.
@@ -397,30 +359,20 @@ def main():
     # bootstrap iterations on both scales, and "percentile == 0" depends only on
     # the zero pattern, not the magnitudes - so the relative CI is used by
     # convention and yields the same table as the absolute CI would.
+    central_abs = central_attr_abs.loc[samples, signatures_to_consider].to_numpy(dtype=float)
     pruned_attribution_table = pd.DataFrame(
+        np.where(lower_CI == 0, 0, np.around(central_abs)),
         index=samples,
-        columns=signatures_to_consider,
-        dtype=int
+        columns=signatures_to_consider
     )
-    for sample in samples:
-        for signature in signatures_to_consider:
-            lower_bound = confidence_intervals.loc[sample, signature][1][0]
-            if lower_bound == 0:
-                pruned_attribution_table.loc[sample, signature] = 0
-            else:
-                pruned_attribution_table.loc[sample, signature] = \
-                    np.around(central_attr_abs.loc[sample, signature])
 
     # Calculate signature prevalences (presence fraction; identical on both scales)
     print('Calculating signature prevalences...')
     signatures_prevalences = pd.DataFrame(
+        (attributions != 0).sum(axis=-1).astype(float),
         index=samples,
-        columns=signatures_to_consider,
-        dtype=float
+        columns=signatures_to_consider
     )
-    for sample in samples:
-        signatures_prevalences.loc[sample] = \
-            attributions_per_sample[sample].astype(bool).sum(axis=0)
     signatures_prevalences = signatures_prevalences / args.number_of_b_samples
 
     print(f'Prevalences calculated. Elapsed: {datetime.now() - start_time}')
@@ -428,67 +380,57 @@ def main():
     # Simulated data specific calculations
     if is_simulated:
         print('Calculating metrics for simulated data...')
-        
-        # Extract lower CI bounds
-        lower_CI_attributions = pd.DataFrame(
-            index=samples, 
-            columns=signatures_to_consider, 
-            dtype=float
-        )
-        for sample in samples:
-            for signature in signatures_to_consider:
-                lower_CI_attributions.loc[sample, signature] = \
-                    confidence_intervals.loc[sample, signature][1][0]
-        
+
+        # Lower CI bounds as an attribution table
+        lower_CI_attributions = pd.DataFrame(lower_CI, index=samples, columns=signatures_to_consider)
+
+        # Signatures never simulated have zero truth
+        for signature in signatures_to_consider:
+            if signature not in truth_attribution_table.columns:
+                truth_attribution_table[signature] = 0
+        truth = truth_attribution_table.loc[samples, signatures_to_consider].to_numpy(dtype=float)
+
         # Calculate signature CPs
         signatures_CPs = calculate_signature_CPs(
-            confidence_intervals,
-            truth_attribution_table,
+            lower_CI,
+            upper_CI,
+            truth,
             samples,
             signatures_to_consider,
             acting_signatures
         )
-        
-        # Calculate truth-measured differences
-        truth_and_measured_difference = pd.DataFrame(
-            0, 
-            index=samples,
-            columns=['Truth - mean', 'Truth - median', 'Truth - NNLS'], 
-            dtype=float
-        )
-        for sample in samples:
-            for signature in signatures_to_consider:
-                if signature not in truth_attribution_table.columns:
-                    truth_attribution_table[signature] = 0
-                
-                array = attributions_per_sample[sample][signature]
-                truth_val = truth_attribution_table.loc[sample, signature]
-                
-                truth_and_measured_difference.loc[sample, 'Truth - mean'] += \
-                    truth_val - np.mean(array)
-                truth_and_measured_difference.loc[sample, 'Truth - median'] += \
-                    truth_val - np.median(array)
-                truth_and_measured_difference.loc[sample, 'Truth - NNLS'] += \
-                    truth_val - central_attribution.loc[sample, signature]
-        
+
+        # Calculate truth-measured differences, summed over the signatures in turn
+        measured = {
+            'Truth - mean': attributions.mean(axis=-1),
+            'Truth - median': np.median(attributions, axis=-1),
+            'Truth - NNLS': central_attribution.loc[samples, signatures_to_consider].to_numpy(dtype=float),
+        }
+        differences = {name: np.zeros(len(samples)) for name in measured}
+        for g in range(len(signatures_to_consider)):
+            for name, values in measured.items():
+                differences[name] += truth[:, g] - values[:, g]
+        truth_and_measured_difference = pd.DataFrame(differences, index=samples)
+
         # Calculate CPs for different thresholds
         if args.signature_attribution_thresholds:
             thresholds = [float(t) / 100 for t in args.signature_attribution_thresholds]
             signatures_CPs_dict = calculate_CPs_for_thresholds(
-                confidence_intervals,
-                truth_attribution_table,
+                lower_CI,
+                upper_CI,
+                truth,
                 samples,
                 signatures_to_consider,
                 thresholds
             )
-            
+
             sensitivity_thresholds = calculate_sensitivity_thresholds(
                 signatures_CPs_dict,
                 signatures_to_consider,
                 thresholds,
                 args.confidence_level
             )
-        
+
         # Calculate statistical scores
         scores = ['Sensitivity', 'Specificity', 'Precision', 'Accuracy', 'F1', 'MCC']
         
