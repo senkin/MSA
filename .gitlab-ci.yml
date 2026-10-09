@@ -4,9 +4,9 @@ stages:
 variables:
   NXF_VER: "26.04.6"
 
-# pinned by digest: the same image as params.container_image (amd64) in nextflow.config
+# pinned by digest: the same image index as params.container_image in nextflow.config
 .msa_image: &msa_image
-  image: ssenkin/msa@sha256:7dfb6a4c0fc4a6865b1d67a4d0b506a52db83ac43c43fe1bf0d9bc794acf6e1c
+  image: ssenkin/msa@sha256:0647240af3ecacf6356502d91f676403941700694ecd8c7c03c843d9a3e4f471
 
 unit_tests:
   <<: *msa_image
