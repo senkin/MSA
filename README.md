@@ -26,6 +26,8 @@ With Nextflow 25.04 or 25.10, keep their default (legacy) parser: their strict p
 
 It is recommended to use [docker](https://www.docker.com/) or [singularity](https://sylabs.io/singularity/) profiles as these normally provide greater stability and reproducibility than [conda](https://conda.io).
 
+**CPU use**: each task requests one CPU (Nextflow's default) and uses one: the maths libraries are limited to one thread (`OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS` and `MKL_NUM_THREADS` in the `env` scope of [nextflow.config](nextflow.config)). Without this, NumPy's OpenBLAS starts a thread per core of the node, so tasks on large shared nodes use several times the CPU they requested. The pipeline's parallelism comes from running many tasks at once.
+
 The pipeline should run and produce all the results automatically. You can also retrieve the code ([see below](#getting-started)) in order to adjust all the inputs and parameters. In the [nextflow.config](nextflow.config) file various parameters can be specified.
 
 ## Running on SigProfiler output
