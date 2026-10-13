@@ -26,7 +26,7 @@ With Nextflow 25.04 or 25.10, keep their default (legacy) parser: their strict p
 
 It is recommended to use [docker](https://www.docker.com/) or [singularity](https://sylabs.io/singularity/) profiles as these normally provide greater stability and reproducibility than [conda](https://conda.io).
 
-**CPU use**: each task requests one CPU (Nextflow's default) and uses one: the maths libraries are limited to one thread (`OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS` and `MKL_NUM_THREADS` in the `env` scope of [nextflow.config](nextflow.config)). Without this, NumPy's OpenBLAS starts a thread per core of the node, so tasks on large shared nodes use several times the CPU they requested. The pipeline's parallelism comes from running many tasks at once.
+**On a cluster**, choose your executor and queue in your own config file, and see [Running on a cluster](#running-on-a-cluster) for the resources each task needs.
 
 The pipeline should run and produce all the results automatically. You can also retrieve the code ([see below](#getting-started)) in order to adjust all the inputs and parameters. In the [nextflow.config](nextflow.config) file various parameters can be specified.
 
@@ -139,6 +139,66 @@ output_path/
 from its own work directory (staged through channels) and the pipeline never reads back from the
 output path, so results do not depend on it being shared with the tasks, and `-resume` reuses
 everything cached in the work directory.
+
+## Running on a cluster
+
+Keep site-specific settings in your own config file, passed with `-c`, for example for SLURM:
+
+```groovy
+// cluster.config
+process {
+    executor = 'slurm'                                       // or sge, lsf, pbspro, ...
+    queue = 'your-partition'
+    resourceLimits = [cpus: 8, memory: 64.GB, time: 24.h]   // your cluster's largest job
+}
+executor {
+    queueSize = 500                                          // jobs queued at once
+}
+```
+
+and run with e.g. `nextflow run https://gitlab.com/s.senkin/MSA -profile apptainer -c cluster.config --dataset ...`.
+
+The numbers below come from a typical run: one mutation type, 1000 samples, the 65 SBS signatures of the
+default reference set and default settings (11,000 simulated samples, 100 bootstrap iterations in the
+optimisation and 1000 in the final attribution).
+
+* **Tasks.** Each bootstrap iteration is a task of its own (`--bootstrap_chunk_size 0`, the default), so
+  such a run has about 1,130 tasks: 100 for the optimisation bootstrap, 1000 for the final one and about
+  30 others. Mutation types run in parallel. The `test` profile has only 60 tasks for three mutation
+  types, as it uses 10 iterations in chunks of 5.
+* **CPUs.** Each task requests one CPU and uses one. The attribution, the tables and the plots are
+  single-threaded, and the maths libraries are limited to one thread (`OMP_NUM_THREADS`,
+  `OPENBLAS_NUM_THREADS` and `MKL_NUM_THREADS` in [nextflow.config](nextflow.config)); without that,
+  NumPy's OpenBLAS starts a thread per core of the node. More CPUs per task would stay idle: their
+  threads do not speed up these small problems.
+* **Memory.** The pipeline requests memory per process, and retries a task killed for exceeding it
+  (exit status 130-145, e.g. 137) with twice, then three times the memory:
+
+  | Processes | Requested | Peak in the typical run | Grows with |
+  |---|---|---|---|
+  | `make_bootstrap_tables` (final attribution) | 8 GB | 3.8 GB | samples × iterations × signatures |
+  | `make_optimisation_bootstrap_tables` | 4 GB | 2.2 GB | simulated samples × iterations × signatures |
+  | `plot_bootstrap_attributions` | 4 GB | 2.8 GB | samples × iterations × signatures |
+  | GPU jobs (`--use_GPU true`) | 8 GB | (not measured) | |
+  | all other processes | 2 GB | 0.15-0.45 GB | samples |
+
+  For a larger cohort, raise the first rows in your config, e.g. for 5000 samples and 1000 final
+  iterations: `process { withName: 'make_bootstrap_tables' { memory = 24.GB } }`. Use `withName` or
+  `withLabel` (`memory_high`, `memory_medium`) for these: the pipeline's own setting for them takes
+  precedence over a plain `process.memory` in your config.
+* **Time.** On one 2.8 GHz Xeon core, the attribution takes 0.8-0.9 s per sample and iteration with
+  65 signatures, and roughly scales with the square of the number of signatures (a SigProfiler
+  decomposition of 10-20 signatures is 10-40 times faster). In the typical run that is 2.5-3 h for
+  `run_optimized_NNLS` and for each of the 100 optimisation bootstrap tasks (11,000 simulated samples),
+  and about 15 min for each final bootstrap task. The input spectra plots take about 1 h, alongside the
+  rest; the bootstrap plots, at the end, about 3 h (`--plot_bootstrap_attributions false` skips them).
+  The other tasks take minutes. Set time limits accordingly, e.g.
+  `process { withName: 'run_optimized_NNLS|run_bootstrap_NNLS' { time = 8.h } }`.
+* **Retries.** When a retried task then succeeds, Nextflow's summary line still counts the failed
+  attempt (`[FAILED] completed=... failed=1`), but the run's exit status is 0.
+* **On one machine.** The local executor refuses a task that requests more memory than is free
+  ("Process requirement exceeds available memory"). Cap the requests with e.g.
+  `-c local.config` holding `process.resourceLimits = [memory: 8.GB]`; the `test` profile caps them at 2 GB.
 
 ## GPU acceleration (experimental)
 

@@ -57,6 +57,7 @@ process plot_input_spectra {
 
 process plot_bootstrap_attributions {
     tag "${mutation_type}/${dataset}"
+    label 'memory_medium'
     publishDir "${params.output_path}/plots", mode: 'copy', overwrite: true
 
     input:
