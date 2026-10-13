@@ -25,12 +25,14 @@ process make_optimisation_bootstrap_tables {
 
     script:
     def pair = "SIM_${dataset}_${params.SBS_context}_NNLS_${suffix}"
+    // --no_distributions: the per-sample bootstrap distributions (JSON, ~1 GB each per pair at
+    // default sizes) are only read by the final attribution's plots, never by the optimisation
     """
     make_bootstrap_tables.py -d SIM_${dataset} -t ${mutation_type} -p ${signature_prefix()} \\
         --suffix ${suffix} -l ${params.confidence_level} \\
         -c ${params.SBS_context} -S signature_tables \\
         -T ${list_args(params.signature_attribution_thresholds)} \\
-        -i attributions -o "./" -n ${num_bootstrap_samples}
+        -i attributions -o "./" -n ${num_bootstrap_samples} --no_distributions
 
     mkdir -p bundle/${pair}
     cp -r ${pair}/truth_studies bundle/${pair}/

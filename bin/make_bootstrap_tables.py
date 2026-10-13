@@ -216,6 +216,11 @@ def main():
     parser.add_argument("-T", "--signature_attribution_thresholds", nargs='+', 
                        dest="signature_attribution_thresholds")
     parser.add_argument("--suffix", dest="suffix", default='')
+    parser.add_argument("--no_distributions", dest="no_distributions", action="store_true",
+                       help="do not write the bootstrap distributions (attributions_per_sample/"
+                            "per_signature and stat_metrics JSON files), which only the bootstrap "
+                            "attribution plots read. They are large: about 1 GB each for 1000 "
+                            "samples, 1000 iterations and 65 signatures")
 
     args = parser.parse_args()
 
@@ -315,7 +320,7 @@ def main():
         signatures_to_consider,
         stat_metrics
     )
-    stat_metrics_dict = distributions_per_column(stat_values, samples, stat_metrics)
+    stat_metrics_dict = None if args.no_distributions else distributions_per_column(stat_values, samples, stat_metrics)
 
     print(f'Bootstrap processing complete. Elapsed: {datetime.now() - start_time}')
 
@@ -334,6 +339,8 @@ def main():
 
         scale_filename = f'{args.dataset_name}_{args.mutation_type}_bootstrap_output_{scale}'
         ci.to_csv(f'{output_folder}/CIs_{scale_filename}.csv')
+        if args.no_distributions:
+            continue
         write_data_to_JSON(
             distributions_per_sample(attributions_by_scale[scale], samples, signatures_to_consider),
             f'{output_folder}/attributions_per_sample_{scale_filename}.json'

@@ -65,16 +65,16 @@ class BootstrapTablesTest(unittest.TestCase):
         if truth:
             TRUTH.to_csv(folder / f'WGS_{dataset}.96.weights.csv')
 
-    def make_tables(self, dataset):
+    def make_tables(self, dataset, *extra_args, out='out'):
         env = dict(os.environ, MPLCONFIGDIR=str(self.tmp / '.matplotlib'), MPLBACKEND='Agg')
         result = subprocess.run(
             [sys.executable, str(BIN / 'make_bootstrap_tables.py'), '-d', dataset, '-t', 'SBS', '-c', '96',
              '-p', 'sigTest', '-S', str(REPO / 'signature_tables'), '-i', str(self.tmp / 'in'),
-             '-o', str(self.tmp / 'out'), '-n', str(N_BOOTSTRAP), '-T', '0', '5', '10'],
+             '-o', str(self.tmp / out), '-n', str(N_BOOTSTRAP), '-T', '0', '5', '10', *extra_args],
             cwd=self.tmp, env=env, capture_output=True, text=True)
         if result.returncode != 0:
             raise AssertionError(f'make_bootstrap_tables.py failed:\n{result.stdout}\n{result.stderr}')
-        return self.tmp / 'out' / dataset
+        return self.tmp / out / dataset
 
     def test_real_data_named_with_SIM(self):
         # no truth table: real data, whatever the name
@@ -108,6 +108,24 @@ class BootstrapTablesTest(unittest.TestCase):
         np.testing.assert_allclose(difference['Truth - mean'], [0.2, 0.3, 0.3])
         np.testing.assert_allclose(difference['Truth - median'], [0.2, 0.3, 0.3])
         np.testing.assert_allclose(difference['Truth - NNLS'], 0, atol=1e-12)
+
+
+    def test_without_distributions(self):
+        # --no_distributions (used by the optimisation) leaves out only the bootstrap
+        # distributions (JSON); every other output is unchanged
+        self.write_attributions('TRUTHDATA', truth=True)
+        full = self.make_tables('TRUTHDATA')
+        lean = self.make_tables('TRUTHDATA', '--no_distributions', out='out_lean')
+
+        def files(root):
+            return {str(p.relative_to(root)) for p in root.rglob('*') if p.is_file()}
+
+        distributions = {f for f in files(full)
+                         if f.startswith(('attributions_per_sample_', 'attributions_per_signature_', 'stat_metrics_'))}
+        self.assertEqual(len(distributions), 6)
+        self.assertEqual(files(lean), files(full) - distributions)
+        for name in files(lean):
+            self.assertEqual((lean / name).read_bytes(), (full / name).read_bytes(), name)
 
 
 class TruthStudiesTest(unittest.TestCase):
