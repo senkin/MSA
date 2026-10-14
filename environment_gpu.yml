@@ -11,7 +11,7 @@
 #   git fetch --depth 1 origin <CUML_COMMIT> && git checkout --detach FETCH_HEAD
 #   conda env create -f conda/environments/all_cuda-133_arch-x86_64.yaml
 #   conda activate all_cuda-133_arch-x86_64
-#   ./build.sh libcuml cuml
+#   ./build.sh libcuml cuml   # with the CMake arguments that setup_gpu_env.sh passes (see there)
 #
 # That build env ALREADY provides every dependency run_NNLS.py needs, at versions
 # compatible with environment.yml: numpy (>=2.0,<3.0), numba (>=0.60,<0.65), scipy

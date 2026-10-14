@@ -206,9 +206,10 @@ The greedy NNLS signature-optimisation hot path can be offloaded to the GPU via
 [cuML](https://github.com/rapidsai/cuml)'s batched NNLS solver. This is opt-in and does not
 affect the default CPU behaviour.
 
-1. **Build the GPU environment** (once per cluster + GPU architecture, as a build job on a
-   node with an NVIDIA driver — not the login node). This builds the source-only cuML into a
-   conda env and tops it up with MSA's dependencies:
+1. **Build the GPU environment** (once per cluster + GPU architecture, as a build job with a
+   GPU allocated, e.g. `--gres=gpu:1` — not on the login node). This builds the source-only
+   cuML into a conda env and tops it up with MSA's dependencies. Without a visible GPU, cuML is
+   built for every GPU architecture, which takes several times longer (the script warns):
 
    ```bash
    ./setup_gpu_env.sh                              # CUDA 13.3 (default)
@@ -219,11 +220,14 @@ affect the default CPU behaviour.
    supported CUDA). The script prints the full env path to use in the next step.
 
    cuML is built from a pinned commit of the `fea-nnls` branch (`CUML_COMMIT` in the script;
-   `--commit` or `--unpinned` to change it), and the build is recorded in the env:
-   `etc/msa_cuml_build.json` (commit, options, versions — copied into every GPU result as
-   `gpu_provenance.json` / the task log) and `etc/msa_gpu_env.lock.txt` (every conda package).
-   The cuML build env uses RAPIDS nightly packages, which are removed after a while, so keep
-   that lock: `./setup_gpu_env.sh --lock msa_gpu_env.lock.txt` rebuilds the same env elsewhere.
+   `--commit` or `--unpinned` to change it), without its C++ tests and benchmarks, and the build
+   is recorded in the env: `etc/msa_cuml_build.json` (commit, options, rapids-cmake commit,
+   versions — copied into every GPU result as `gpu_provenance.json` / the task log) and
+   `etc/msa_gpu_env.lock.txt` (every conda package). The cuML build env uses RAPIDS nightly
+   packages, which are removed after a while, and cuML's build tooling (rapids-cmake) is taken
+   from the tip of its branch when the script runs, so keep both:
+   `./setup_gpu_env.sh --lock msa_gpu_env.lock.txt --rapids-cmake-sha <rapids_cmake_sha>`
+   rebuilds the same env elsewhere.
 
    Before relying on a new env, validate it on a GPU node against the CPU (fp64) reference.
    This checks GPU fp64 against CPU, repeatability, independence from the batch size, and the
