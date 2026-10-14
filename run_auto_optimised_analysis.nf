@@ -150,6 +150,23 @@ def validate_parameters(mutation_types) {
     }
 }
 
+// Which backend runs the NNLS, and how many bootstrap iterations each task runs. Without
+// use_GPU, the NNLS jobs of a GPU config still go to its GPU queue but run on the CPU.
+def log_nnls_backend() {
+    def use_gpu = params.use_GPU.toBoolean()
+    def chunk_size = (params.bootstrap_chunk_size ?: 0) as int
+    def per_task = chunk_size > 0 ? "up to ${chunk_size} bootstrap iterations per task"
+        : (use_gpu ? 'all bootstrap iterations of an attribution in one task' : 'one bootstrap iteration per task')
+    if (use_gpu) {
+        log.info "NNLS backend: GPU (cuML, ${params.gpu_precision} precision), ${per_task}, env: ${params.gpu_conda_env ?: 'the default one'}"
+        if (!params.gpu_conda_env && workflow.profile.tokenize(',').contains('conda')) {
+            log.warn "use_GPU = true without gpu_conda_env: the GPU NNLS processes run in the default conda env, which has no cuML. Set gpu_conda_env to the full path of the env built by setup_gpu_env.sh"
+        }
+    } else {
+        log.info "NNLS backend: CPU, ${per_task}"
+    }
+}
+
 // Write what is needed to reproduce this run (resolved seed, code revision, versions,
 // profile, all parameters) next to its results, in <output_path>/pipeline_info/.
 def write_run_info(run_seed, seed_source) {
@@ -289,6 +306,7 @@ workflow {
 
     def mutation_types = mutation_types_list()
     validate_parameters(mutation_types)
+    log_nnls_backend()
 
     // Resolve the run-wide RNG seed once; it seeds both the simulations and the bootstrap
     // resampling. Without --seed, a seed is derived from the Nextflow session ID: new for

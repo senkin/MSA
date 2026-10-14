@@ -8,6 +8,15 @@
 // `process.queue` from your global ~/.nextflow/config (and a `withLabel` selector
 // outranks a generic setting), so these win over a cluster-wide default queue.
 
+// Turn the GPU on, and run the GPU NNLS processes in the env built by setup_gpu_env.sh
+// (its FULL path, printed at the end of the build). Set here rather than in nextflow.config,
+// so that updating the pipeline does not undo it; these override the profile's params.
+// Without use_GPU = true, the NNLS jobs still go to the GPU queue below but run on its CPU.
+params {
+    use_GPU = true
+    gpu_conda_env = '/full/path/to/envs/all_cuda-133_arch-x86_64'
+}
+
 process {
     withLabel: 'gpu_nnls' {
         queue = 'gpu'                       // your GPU partition/queue
