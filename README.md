@@ -186,14 +186,14 @@ optimisation and 1000 in the final attribution).
   iterations: `process { withName: 'make_bootstrap_tables' { memory = 24.GB } }`. Use `withName` or
   `withLabel` (`memory_high`, `memory_medium`) for these: the pipeline's own setting for them takes
   precedence over a plain `process.memory` in your config.
-* **Time.** On one 2.8 GHz Xeon core, the attribution takes 0.8-0.9 s per sample and iteration with
-  65 signatures, and roughly scales with the square of the number of signatures (a SigProfiler
-  decomposition of 10-20 signatures is 10-40 times faster). In the typical run that is 2.5-3 h for
-  `run_optimized_NNLS` and for each of the 100 optimisation bootstrap tasks (11,000 simulated samples),
-  and about 15 min for each final bootstrap task. The input spectra plots take about 1 h, alongside the
-  rest; the bootstrap plots, at the end, about 3 h (`--plot_bootstrap_attributions false` skips them).
-  The other tasks take minutes. Set time limits accordingly, e.g.
-  `process { withName: 'run_optimized_NNLS|run_bootstrap_NNLS' { time = 8.h } }`.
+* **Time.** With 65 signatures, the attribution takes 0.2 s (AMD EPYC 9115 core) to 0.9 s
+  (2.8 GHz Xeon core) per sample and iteration, and roughly scales with the square of the number of
+  signatures (a SigProfiler decomposition of 10-20 signatures is 10-40 times faster). In the typical
+  run that is 0.5-3 h for `run_optimized_NNLS` and for each of the 100 optimisation bootstrap tasks
+  (11,000 simulated samples), and 3-15 min for each final bootstrap task. On the Xeon, the input
+  spectra plots took about 1 h, alongside the rest, and the bootstrap plots, at the end, about 3 h
+  (`--plot_bootstrap_attributions false` skips them). The other tasks take minutes. Set time limits
+  accordingly, e.g. `process { withName: 'run_optimized_NNLS|run_bootstrap_NNLS' { time = 8.h } }`.
 * **Retries.** When a retried task then succeeds, Nextflow's summary line still counts the failed
   attempt (`[FAILED] completed=... failed=1`), but the run's exit status is 0.
 * **On one machine.** The local executor refuses a task that requests more memory than is free
@@ -234,14 +234,21 @@ affect the default CPU behaviour.
    tests/gpu_acceptance.sh --gpu-python /path/to/gpu-env/bin/python --cpu-python /path/to/msa-env/bin/python
    ```
 
-2. **Enable it** in [nextflow.config](nextflow.config) (or on the command line). `gpu_conda_env`
-   must be the **full path** to the built env — a bare name is treated by Nextflow's `conda`
-   directive as a package to install:
+2. **Enable it** in your own config for GPU runs (e.g. `gpu.config`, see step 3), rather than in
+   nextflow.config, so that updating the pipeline does not undo it. `gpu_conda_env` must be the
+   **full path** to the built env — a bare name is treated by Nextflow's `conda` directive as a
+   package to install:
 
    ```groovy
-   use_GPU       = true
-   gpu_conda_env = '/home/you/miniforge3/envs/all_cuda-133_arch-x86_64'
+   params {
+       use_GPU       = true
+       gpu_conda_env = '/home/you/miniforge3/envs/all_cuda-133_arch-x86_64'
+   }
    ```
+
+   The `test_GPU` profile sets `use_GPU = true` itself. An env built by an earlier
+   `setup_gpu_env.sh` (no `etc/msa_cuml_build.json` in it) has an unpinned cuML and unpinned
+   packages: rebuild it, or at least validate it as above.
 
 3. **Route the NNLS jobs to a GPU queue.** Cluster-specific queue/GPU-request settings are
    deliberately not committed; put them in your own config (e.g. `gpu.config`) and pass it with
@@ -253,6 +260,12 @@ Then run with a conda-enabled profile:
 ```bash
 nextflow run run_auto_optimised_analysis.nf -profile conda,test_GPU -c gpu.config
 ```
+
+The run log names the NNLS backend at the start: check that it reads `NNLS backend: GPU`, and
+that the NNLS task logs (`.command.log`) read `GPU backend enabled (cuML)`. With `use_GPU = false`,
+the NNLS jobs still go to the GPU queue of your `gpu.config`, but run on its CPU, and `test_GPU`'s
+250 bootstrap iterations per task then take days. For a CPU comparison of `test_GPU`, leave out
+`-c gpu.config` and pass `--use_GPU false --bootstrap_chunk_size 0`.
 
 The penalty scan replays one batched removal trajectory per sample on the GPU as well; the
 acceptance check above also verifies that this gives exactly the results of one run per penalty

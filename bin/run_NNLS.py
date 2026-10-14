@@ -1489,6 +1489,8 @@ if __name__ == '__main__':
         configure_gpu_backend(args.gpu_precision)
         print(f"GPU backend enabled (cuML), precision: {args.gpu_precision}")
         print("GPU provenance:", json.dumps(_GPU_SOLVER.provenance(), default=str))
+    else:
+        print("CPU backend (SciPy NNLS)")
 
     if args.n_bootstrap > 0:
         # ===== In-process bootstrap loop (P3) =====
