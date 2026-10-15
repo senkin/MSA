@@ -216,6 +216,19 @@ _CHUNK_MIN = 256
 _CHUNK_MAX = 1 << 20
 
 
+def _point_conda_prefix_at_this_env():
+    """Set CONDA_PREFIX to the conda env of this interpreter, as activating it would.
+
+    cupy compiles some kernels at run time and finds the CUDA headers of a conda env through
+    $CONDA_PREFIX (cuda.pathfinder). Running the env's python by its path, without activating
+    the env (e.g. tests/gpu_acceptance.sh), leaves it unset or naming another env, and cupy
+    then fails with "Failed to find CUDA headers". Nextflow's conda directive activates the env.
+    """
+    if (os.path.isdir(os.path.join(sys.prefix, 'conda-meta'))
+            and os.path.realpath(os.environ.get('CONDA_PREFIX', '')) != os.path.realpath(sys.prefix)):
+        os.environ['CONDA_PREFIX'] = sys.prefix
+
+
 def _init_gpu_backend():
     """Bring up an RMM pool and put cupy on raft's stream (once per process).
 
@@ -234,6 +247,7 @@ def _init_gpu_backend():
     global _GPU_INITIALISED, _GPU_STREAM, _GPU_POOL_BYTES
     if _GPU_INITIALISED:
         return
+    _point_conda_prefix_at_this_env()  # before cupy is imported
     import rmm
     from rmm.allocators.cupy import rmm_cupy_allocator
     import cupy as cp
@@ -414,7 +428,13 @@ def configure_gpu_backend(precision='mixed'):
     require cupy/cuml to be installed. See _GpuBatchedSolver for the precision modes.
     """
     global _GPU_SOLVER
-    _GPU_SOLVER = _GpuBatchedSolver(precision=precision)
+    try:
+        _GPU_SOLVER = _GpuBatchedSolver(precision=precision)
+    except ImportError as e:
+        # e.g. the GPU processes ran in the default env instead of the one built by setup_gpu_env.sh
+        sys.exit(f"ERROR: --use_gpu needs cupy, rmm and cuML, but '{e.name}' cannot be imported in "
+                 f"the env {sys.prefix}. Run the GPU processes in the env built by setup_gpu_env.sh "
+                 f"(params.gpu_conda_env, with -profile conda). ({e})")
 
 
 def batched_solve_and_score(A, B, norm_obs, masks, b_index, chunk_size=4096):

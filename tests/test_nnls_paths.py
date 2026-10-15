@@ -11,10 +11,13 @@ same attributions as the per-sample CPU path:
 Neither needs a GPU. The real cuML solver is checked by tests/gpu_acceptance.sh.
 Run from the repository root:  python -m unittest discover -s tests -v
 """
+import os
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -141,6 +144,57 @@ class GpuWrapperTest(unittest.TestCase):
         self.assertEqual(info['versions']['cuml'], 'fake')
         self.assertIsNotNone(info['auto_batch_size'])
         self.assertIn('cuml_build', info)
+
+
+class CondaPrefixTest(unittest.TestCase):
+    """cupy finds a conda env's CUDA headers through CONDA_PREFIX, which the GPU start-up
+    points at the env of the interpreter (as activating the env would)."""
+
+    def point(self, conda_env, conda_prefix):
+        """CONDA_PREFIX after _point_conda_prefix_at_this_env(), for an interpreter prefix that
+        is (conda_env) or is not a conda env, and a CONDA_PREFIX of conda_prefix(prefix) or unset."""
+        with tempfile.TemporaryDirectory() as prefix:
+            if conda_env:
+                os.mkdir(os.path.join(prefix, 'conda-meta'))
+            with mock.patch.object(sys, 'prefix', prefix), mock.patch.dict(os.environ):
+                os.environ.pop('CONDA_PREFIX', None)
+                if conda_prefix is not None:
+                    os.environ['CONDA_PREFIX'] = conda_prefix(prefix)
+                R._point_conda_prefix_at_this_env()
+                return prefix, os.environ.get('CONDA_PREFIX')
+
+    def test_env_python_run_directly(self):
+        prefix, conda_prefix = self.point(conda_env=True, conda_prefix=None)
+        self.assertEqual(conda_prefix, prefix)
+
+    def test_another_env_activated(self):
+        prefix, conda_prefix = self.point(conda_env=True, conda_prefix=lambda _: '/opt/miniforge3')
+        self.assertEqual(conda_prefix, prefix)
+
+    def test_env_activated(self):
+        prefix, conda_prefix = self.point(conda_env=True, conda_prefix=lambda p: p)
+        self.assertEqual(conda_prefix, prefix)
+
+    def test_not_a_conda_env(self):
+        _, conda_prefix = self.point(conda_env=False, conda_prefix=lambda _: '/opt/miniforge3')
+        self.assertEqual(conda_prefix, '/opt/miniforge3')
+        _, conda_prefix = self.point(conda_env=False, conda_prefix=None)
+        self.assertIsNone(conda_prefix)
+
+
+class MissingGpuStackTest(unittest.TestCase):
+    """--use_gpu in an env without the GPU stack stops with a message naming the env."""
+
+    def test_clear_error(self):
+        import importlib.util
+        if any(importlib.util.find_spec(m) is not None for m in ('cupy', 'rmm', 'cuml')):
+            raise unittest.SkipTest('a GPU stack (or its stand-in) is importable here')
+        with self.assertRaises(SystemExit) as cm:
+            R.configure_gpu_backend('mixed')
+        self.assertIn(sys.prefix, str(cm.exception.code))
+        self.assertIn('setup_gpu_env.sh', str(cm.exception.code))
+        self.assertIsNone(R._GPU_SOLVER)
+        self.assertFalse(R._GPU_INITIALISED)
 
 
 if __name__ == '__main__':
