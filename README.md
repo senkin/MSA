@@ -267,16 +267,20 @@ nextflow run run_auto_optimised_analysis.nf -profile conda,test_GPU -c gpu.confi
 
 The run log names the NNLS backend at the start: check that it reads `NNLS backend: GPU`, and
 that the NNLS task logs (`.command.log`) read `GPU backend enabled (cuML)`. With `use_GPU = false`,
-the NNLS jobs still go to the GPU queue of your `gpu.config`, but run on its CPU, and `test_GPU`'s
-250 bootstrap iterations per task then take days. For a CPU comparison of `test_GPU`, leave out
-`-c gpu.config` and pass `--use_GPU false --bootstrap_chunk_size 0`.
+the NNLS jobs still go to the GPU queue of your `gpu.config`, but run on its CPU. For a CPU
+comparison of `test_GPU`, leave out `-c gpu.config` and pass `--use_GPU false --bootstrap_chunk_size 0`.
+
+`test_GPU` is sized as a quick check (1000 simulated samples, 20 + 100 bootstrap iterations). Its
+comments in [nextflow.config](nextflow.config) give the options for a full-size run of the same
+dataset (11,000 simulated samples, 100 + 1000 iterations), as in a typical analysis of 1000 samples.
 
 The penalty scan replays one batched removal trajectory per sample on the GPU as well; the
 acceptance check above also verifies that this gives exactly the results of one run per penalty
 on your GPU (`--threshold_scan separate` is the fallback).
 
 By default each GPU bootstrap runs as a single job. To spread it over several GPUs, set
-`--bootstrap_chunk_size` (e.g. `250` runs 1000 iterations as 4 GPU jobs; `test_GPU` does this).
+`--bootstrap_chunk_size` (e.g. `250` runs 1000 iterations as 4 GPU jobs; `test_GPU` runs its 100
+final iterations as 2 jobs of 50).
 Iteration `i` is always seeded from `(seed, i)`, so the split does not change the results.
 
 ## Penalty scan

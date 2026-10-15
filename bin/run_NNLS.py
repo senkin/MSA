@@ -649,15 +649,18 @@ def perform_signature_attribution(selected_mutations, signatures, normalise_muta
     skipped and those weights are used directly. This lets the non-optimised path
     solve all samples through batched_nnls_shared_A() and still reuse this
     function for the per-sample post-processing.
+
+    ``signatures`` is a DataFrame of the selected signatures, or their values as an array
+    (e.g. sig_values[:, cols], the same column-major array as signatures.loc[:, names].values
+    but about 100x faster to select, which matters when it is done per sample and penalty).
     """
-    if signatures.empty:
+    sig_array = signatures if isinstance(signatures, np.ndarray) else signatures.values
+    if sig_array.size == 0:
         if verbose:
             print('Zero signatures provided to NNLS.')
         n_stats = 11
         return np.nan, np.nan, np.nan, np.nan, [sum(selected_mutations)] + [np.nan] * (n_stats - 1)
 
-    # Convert to numpy for speed
-    sig_array = signatures.values
     mut_array = np.array(selected_mutations)
 
     # NNLS solve (skipped when weights are supplied by a batched solver)
@@ -695,7 +698,7 @@ def perform_signature_attribution(selected_mutations, signatures, normalise_muta
     if verbose:
         if chi2 > 1e10:
             print('************* High chi2 sample *************')
-        print(f'Signatures: {signatures.columns.tolist()}')
+        print(f'Signatures: {signatures.columns.tolist() if hasattr(signatures, "columns") else "(array)"}')
         print(f'Stats: {stat_info}')
 
     return normalised_weights, mutation_numbers, fitted, residuals, stat_info
@@ -1183,19 +1186,21 @@ def process_samples_batch(input_mutations, signatures, sel_sig_nums, args, traje
                     chunk_size=gpu_chunk)
 
             for j, s_i in enumerate(valid_s_i):
-                final_names = [all_names[c] for c in per_sample_cols[j]]
-                if not final_names:
+                final_cols = list(per_sample_cols[j])
+                if not final_cols:
                     continue
-                final_signatures = signatures.loc[:, final_names]
+                # array columns, not signatures.loc (see perform_signature_attribution)
+                final_signatures = signatures.iloc[:, final_cols] if args.verbose else sig_values[:, final_cols]
 
                 normalised_weights, mutation_numbers, fitted, residuals, stat_info = \
                     perform_signature_attribution(B[:, j], final_signatures,
                                                 normalise_mutations=args.normalise_mutations,
                                                 verbose=args.verbose)
 
-                cols = [col_pos[name] for name in final_names]
+                cols = [col_pos[all_names[c]] for c in final_cols]
                 _store(s_i, cols, normalised_weights, mutation_numbers, stat_info, residuals, fitted)
     else:
+        sig_values = signatures.values
         for s_i, sample in enumerate(samples):
             selected_mutations = input_mutations[sample].values
 
@@ -1205,7 +1210,16 @@ def process_samples_batch(input_mutations, signatures, sel_sig_nums, args, traje
 
             if args.optimise_signatures and trajectories is not None:
                 keep = select_from_trajectory(*trajectories[s_i], args.weak_threshold)
-                final_signatures = signatures.loc[:, [signatures.columns[c] for c in keep]]
+                if keep:
+                    # array columns, not signatures.loc (see perform_signature_attribution)
+                    normalised_weights, mutation_numbers, fitted, residuals, stat_info = \
+                        perform_signature_attribution(selected_mutations,
+                                                      signatures.iloc[:, keep] if args.verbose else sig_values[:, keep],
+                                                      normalise_mutations=args.normalise_mutations,
+                                                      verbose=args.verbose)
+                    cols = [col_pos[signatures.columns[c]] for c in keep]
+                    _store(s_i, cols, normalised_weights, mutation_numbers, stat_info, residuals, fitted)
+                continue
             elif args.optimise_signatures:
                 final_signatures = optimise_signatures(
                     selected_mutations, initial_signatures, signatures,
