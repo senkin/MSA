@@ -1,9 +1,10 @@
 from optparse import OptionParser
-import os, copy
+import os, sys, copy, warnings
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.stats as stats
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'bin'))
 from common_methods import calculate_similarity
 from itertools import combinations
 

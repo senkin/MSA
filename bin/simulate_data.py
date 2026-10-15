@@ -1,6 +1,8 @@
+#!/usr/bin/env python3
 import argparse
 import warnings
 import random
+import zlib
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -123,7 +125,21 @@ if __name__ == '__main__':
                         help="set path to input signature activities table to bootstrap")
     parser.add_argument("-I", "--inject_signatures", dest="inject_signatures", action="store_true",
                         help="inject additional signatures as specified in signatures_to_inject dictionary in the script")
+    parser.add_argument("--seed", dest="seed", default=None, type=int,
+                        help="Base RNG seed. When set, the simulation is reproducible: the random streams are seeded "
+                             "from (seed, dataset, mutation type, context), so each mutation type gets its own "
+                             "stream, independent of the bootstrap streams seeded from the same base seed. "
+                             "Default: non-deterministic.")
     args = parser.parse_args()
+
+    if args.seed is not None:
+        # Mix the base seed with a stable tag (zlib.crc32, not the salted built-in hash) so that
+        # simulations of different mutation types/contexts draw independent streams. Both the
+        # legacy numpy global RNG (np.random.*, pandas .sample) and Python's random are seeded.
+        stream_tag = zlib.crc32(f'simulate:{args.dataset_name}:{args.mutation_type}:{args.context}'.encode())
+        state = np.random.SeedSequence([args.seed, stream_tag]).generate_state(2)
+        np.random.seed(int(state[0]))
+        random.seed(int(state[1]))
 
     mutation_type = args.mutation_type
     dataset_name = args.dataset_name
@@ -188,6 +204,16 @@ if __name__ == '__main__':
         if not args.input_table:
             parser.error("Please provide the input signature activities table for bootstrap with -i option.")
         input_table = pd.read_csv(args.input_table, index_col=0, sep=',')
+        # Input samples without mutations of this type (common for sparse types, e.g. DBS)
+        # would only give empty simulated samples, which test no attribution: resample the others
+        empty = input_table.fillna(0).sum(axis=1) <= 0
+        if empty.all():
+            warnings.warn('None of the %i input samples has %s mutations: all simulated samples are empty'
+                          % (len(input_table), mutation_type))
+        elif empty.any():
+            warnings.warn('%i of %i input samples have no %s mutations: simulating from the other %i'
+                          % (empty.sum(), len(input_table), mutation_type, (~empty).sum()))
+            input_table = input_table[~empty]
         bootstrapped_table = input_table.sample(n=number_of_samples, replace=True)
         for signature in input_table.columns:
             print('Generating signature burden for', signature)
@@ -247,8 +273,9 @@ if __name__ == '__main__':
                 continue
             if not args.bootstrap_input_signature_activities_table and not random_signatures and signature in signatures_to_generate:
                 raise ValueError("Signature %s can not be generated and injected simultaneously" % (signature))
-            mu = signatures_to_inject[signature][0]*mutational_burden
-            sigma = signatures_to_inject[signature][1]*mutational_burden
+            # relative to the burden of each sample
+            mu = signatures_to_inject[signature][0]*generated_mutational_burdens
+            sigma = signatures_to_inject[signature][1]*generated_mutational_burdens
             p = signatures_to_inject[signature][2]
             # draw burdens from normal distribution, multiplied by binomial distribution for p probability of injection
             generated_burdens = np.random.normal(mu, sigma, number_of_samples) * np.random.binomial(1, p, number_of_samples)
@@ -256,8 +283,8 @@ if __name__ == '__main__':
             # generated_burdens = np.random.exponential(500, number_of_samples) * np.random.binomial(1, p, number_of_samples)
             # replace negative values of the Gaussian with zeros
             generated_burdens[generated_burdens<0] = 0
-            # plot the generated burden
-            plot_mutational_burden(generated_burdens, mu, sigma, signature,
+            # plot the generated burden (with a fitted Gaussian: mu and sigma differ per sample)
+            plot_mutational_burden(generated_burdens, title=signature,
                                 savepath='%s/%s_plots/generated_burden_%s.pdf' % (output_path, dataset_name, signature))
             if signature in generated_signature_burdens.keys():
                 generated_signature_burdens[signature] += generated_burdens
@@ -268,7 +295,7 @@ if __name__ == '__main__':
     for i in samples_range:
         weights = {}
         for signature in generated_signature_burdens.keys():
-            if mutational_burden!=0:
+            if generated_mutational_burdens[i]!=0:
                 weights[signature] = generated_signature_burdens[signature][i]/generated_mutational_burdens[i]
                 # replace signature activities of <1% with 0
                 if weights[signature] < args.zero_inflation_threshold:

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """ plot_bootstrap_attributions.py
 Module to plot attributions with CIs on per-sample and per-signature basis.
 """
@@ -11,7 +12,8 @@ matplotlib.use("agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import seaborn as sns
-from common_methods import make_folder_if_not_exists, read_data_from_JSON
+import os
+from common_methods import make_folder_if_not_exists, read_data_from_JSON, truth_table_path
 plt.rc('text', usetex=False)
 
 def plot_bootstrap_attribution_histograms(input_table, centrals, title, savepath='./hist.pdf'):
@@ -172,18 +174,14 @@ if __name__ == '__main__':
     else: # SV and CNV
         input_mutations = pd.read_csv('%s/%s/WGS_%s.%s.csv' % (input_mutations_folder, dataset_name, dataset_name, mutation_type), index_col=0)
 
-    if 'SIM' in dataset_name:
-        if mutation_type=='SBS':
-            truth_attribution_table = pd.read_csv(input_attributions_folder + '/WGS_%s.%i.weights.csv' % (dataset_name, context), index_col=0)
-        elif mutation_type=='DBS':
-            truth_attribution_table = pd.read_csv(input_attributions_folder + '/WGS_%s.dinucs.weights.csv' % dataset_name, index_col=0)
-        elif mutation_type=='ID':
-            truth_attribution_table = pd.read_csv(input_attributions_folder + '/WGS_%s.indels.weights.csv' % dataset_name, index_col=0)
-        else: # SV and CNV
-            truth_attribution_table = pd.read_csv(input_attributions_folder + '/WGS_%s.%s.weights.csv' % (dataset_name, mutation_type), index_col=0)
+    # simulated data come with their truth table
+    truth_file = truth_table_path(input_attributions_folder, dataset_name, mutation_type, context)
+    is_simulated = os.path.exists(truth_file)
+    if is_simulated:
+        truth_attribution_table = pd.read_csv(truth_file, index_col=0)
 
     if args.abs_numbers:
-        if 'SIM' in dataset_name:
+        if is_simulated:
             # multiply truth table by mutational burden from input sample:
             truth_attribution_table = truth_attribution_table.mul(np.asarray(input_mutations.sum(axis=0)), axis=0)
         central_attribution_table = central_attribution_table_abs
@@ -205,7 +203,7 @@ if __name__ == '__main__':
 
     signatures_to_consider = list(central_attribution_table_abs.columns)
 
-    if 'SIM' in dataset_name:
+    if is_simulated:
         truth_attribution_table.columns = truth_attribution_table.columns.astype(str)
         truth_attribution_table.index = truth_attribution_table.index.astype(str)
         for signature in signatures_to_consider:
@@ -234,7 +232,7 @@ if __name__ == '__main__':
         savepath = output_folder + '/' + savepath_filename.replace('bootstrap_plot','all_attributions') + '.pdf')
 
     # if applicable, make a boxplot with truth attributions
-    if 'SIM' in dataset_name:
+    if is_simulated:
         make_bootstrap_attribution_boxplot(truth_attribution_table,
             title = main_title + ': truth attributions',
             prefix = 'Truth',
@@ -247,7 +245,7 @@ if __name__ == '__main__':
         make_bootstrap_attribution_boxplot(attributions_per_sample_dict[sample],
             centrals = central_attribution_table.loc[sample].to_dict(),
             title = main_title + ': sample ' + sample.replace("_", "-"),
-            truth = truth_attribution_table.loc[sample].to_dict() if 'SIM' in dataset_name else None,
+            truth = truth_attribution_table.loc[sample].to_dict() if is_simulated else None,
             y_label = 'Signature attribution',
             savepath = output_folder + '/sample_based/' + savepath_filename + '_' + sample + '.pdf')
         # # pd.to_json function does not fully support MultiIndex (present in signature tables), hence commented out for now
@@ -259,7 +257,7 @@ if __name__ == '__main__':
         #     savepath = output_folder + '/sample_based/spectra/bootstrap_plot_' + sample + '_spectrum.pdf')
         for signature in signatures_to_consider:
             # do not plot signatures with both central (or truth) and mean bootstrap attributions of zero:
-            if 'SIM' in dataset_name:
+            if is_simulated:
                 if truth_attribution_table.loc[sample, signature] == 0 and np.mean(attributions_per_sample_dict[sample][signature] == 0):
                     attributions_per_sample_dict[sample].drop(signature, axis=1, inplace=True)
             elif central_attribution_table.loc[sample, signature] == 0 and np.mean(attributions_per_sample_dict[sample][signature] == 0):
@@ -272,14 +270,14 @@ if __name__ == '__main__':
 
     # make bootstrap attribution plots for each signature
     for signature in signatures_to_consider:
-        if 'SIM' in dataset_name:
+        if is_simulated:
             if np.mean(truth_attribution_table[signature].values)==0 and np.mean(attributions_per_signature_dict[signature].values)==0:
                 # skip zero signatures in both truth and measurement
                 continue
         make_bootstrap_attribution_boxplot(attributions_per_signature_dict[signature],
             centrals = central_attribution_table[signature].to_dict(),
             title = main_title + ': ' + signature.replace("_", "-"),
-            truth = truth_attribution_table[signature].to_dict() if 'SIM' in dataset_name else None,
+            truth = truth_attribution_table[signature].to_dict() if is_simulated else None,
             y_label = 'Signature attribution',
             savepath = output_folder + '/signature_based/' + savepath_filename + '_' + signature + '.pdf')
 

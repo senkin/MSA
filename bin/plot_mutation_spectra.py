@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 from argparse import ArgumentParser
 import pandas as pd
 from common_methods import make_folder_if_not_exists

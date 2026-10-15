@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """ convert_SP_to_MSA.py
 Module to convert mutation tables from SigProfilerMatrixGenerator or signatures
 tables from SigProfilerExtractor output paths specified by -i parameter, to

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """ plot_metrics.py
 Module to plot various metrics such as sensitivity, specificity (if simulated data) and other metrics
 Only signature prevalences are plotted on non-simulated data.
@@ -9,6 +10,7 @@ import pandas as pd
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
+import os
 from common_methods import make_folder_if_not_exists, read_data_from_JSON
 matplotlib.use("agg")
 
@@ -192,7 +194,8 @@ if __name__ == '__main__':
     make_boxplot(signatures_prevalences, 'Signature prevalence (%s)' % mutation_type, 'Signatures', 'Reconstructed (%)', savepath=output_folder + '/signature_prevalences.pdf')
 
     # read truth-related dataframes and dictionaries of calculated variables
-    if 'SIM' in dataset_name:
+    # truth studies exist for simulated data only (see make_bootstrap_tables.py)
+    if os.path.isdir(input_attributions_folder + '/truth_studies'):
         truth_and_measured_difference = pd.read_csv(input_attributions_folder + '/truth_studies/truth_and_measured_difference_' + mutation_type + '.csv', index_col=0)
         signatures_CPs = pd.read_csv(input_attributions_folder + '/truth_studies/signatures_CPs_' + mutation_type + '.csv', index_col=0)
         sensitivity_thresholds = pd.read_csv(input_attributions_folder + '/truth_studies/sensitivity_thresholds_' + mutation_type + '.csv', index_col=0)

@@ -1,5 +1,4 @@
 #!/usr/bin/env nextflow
-nextflow.enable.dsl = 2
 // Copyright (C) 2025 Sergey Senkin
 
 // This program is free software: you can redistribute it and/or modify
@@ -15,25 +14,41 @@ nextflow.enable.dsl = 2
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-log.info ''
-log.info '--------------------------------------------------------'
-log.info '              __   __  _____                             '
-log.info '             |  \\/  |/ ____|  /\\                      '
-log.info '             | \\  / | (___   /  \\                     '
-log.info '             | |\\/| |\\___ \\ / /\\ \\                 '
-log.info '             | |  | |____) / ____ \\                    '
-log.info '             |_|  |_|_____/_/    \\_\\                  '
-log.info '                                                        '
-log.info '          MUTATIONAL SIGNATURE ANALYSIS v3.0            '
-log.info '--------------------------------------------------------'
-log.info 'Copyright (C) Sergey Senkin'
-log.info 'This program comes with ABSOLUTELY NO WARRANTY; for details see LICENSE'
-log.info 'This is free software, and you are welcome to redistribute it'
-log.info 'under certain conditions; see LICENSE for details.'
-log.info '--------------------------------------------------------'
-log.info ''
+// Data flow: every process receives the files it reads through channels, staged in its work
+// directory, and writes only there. Results are published to <output_path> for the user and
+// never read back by the pipeline; intermediate files are published to <output_path> only with
+// cleanup_temp = false. Mutation types run in parallel, as (dataset, mutation_type) keys.
 
-if (params.help) {
+include { convert_data as convert_signatures; convert_data as convert_inputs } from './modules/data_conversion'
+include { run_unoptimized_NNLS; resolve_thresholds; run_optimized_NNLS; run_bootstrap_NNLS; run_final_NNLS; run_final_bootstrap_NNLS } from './modules/nnls'
+include { simulate_data } from './modules/simulations'
+include { make_optimisation_bootstrap_tables; make_bootstrap_tables } from './modules/bootstrap_tables'
+include { calculate_optimal_penalties } from './modules/optimal_penalties'
+include { plot_optimisation_plots } from './modules/optimisation_plots'
+include { plot_signatures; plot_input_spectra; plot_bootstrap_attributions; plot_metrics; plot_fitted_spectra; plot_residuals } from './modules/plotting'
+include { bootstrap_chunks } from './modules/common'
+
+def print_banner() {
+    log.info ''
+    log.info '--------------------------------------------------------'
+    log.info '              __   __  _____                             '
+    log.info '             |  \\/  |/ ____|  /\\                      '
+    log.info '             | \\  / | (___   /  \\                     '
+    log.info '             | |\\/| |\\___ \\ / /\\ \\                 '
+    log.info '             | |  | |____) / ____ \\                    '
+    log.info '             |_|  |_|_____/_/    \\_\\                  '
+    log.info '                                                        '
+    log.info '          MUTATIONAL SIGNATURE ANALYSIS v3.0            '
+    log.info '--------------------------------------------------------'
+    log.info 'Copyright (C) Sergey Senkin'
+    log.info 'This program comes with ABSOLUTELY NO WARRANTY; for details see LICENSE'
+    log.info 'This is free software, and you are welcome to redistribute it'
+    log.info 'under certain conditions; see LICENSE for details.'
+    log.info '--------------------------------------------------------'
+    log.info ''
+}
+
+def print_help() {
     log.info "--------------------------------------------------------"
     log.info "  USAGE                                                 "
     log.info "--------------------------------------------------------"
@@ -53,7 +68,7 @@ if (params.help) {
     log.info "     --SP_matrix_generator_output_path <path>  : SigProfiler matrix generator output"
     log.info ""
     log.info "  3. Default directories (lowest priority):"
-    log.info "     --input_tables <path>      : Directory with mutation tables"
+    log.info "     --input_tables <path>      : Directory with mutation tables (in <path>/<dataset>/)"
     log.info "     --signature_tables <path>  : Directory with signature tables"
     log.info ""
     log.info "EXAMPLE USAGE:"
@@ -69,38 +84,60 @@ if (params.help) {
     log.info "  nextflow run run_auto_optimised_analysis.nf --dataset my_data"
     log.info ""
     log.info "Note: Specific file inputs override SigProfiler outputs, which override default directories."
-    log.info "      All inputs are converted and stored in the temp directory for processing."
+    log.info "      Converted inputs are kept in <output_path>/temp with --cleanup_temp false."
     log.info ""
-    exit 0
-} else {
-/* Software information */
-log.info "help:                               ${params.help}"
 }
 
-// add parameter values to log output (.nextflow.log)
-log.info params.collect { k,v -> "${k.padRight(34)}: $v" }.join("\n")
-
-// Normalize mutation_types to always be a list (handle command-line string input)
-if (params.mutation_types instanceof String) {
-    mutation_types = [params.mutation_types]
-} else {
-    mutation_types = params.mutation_types
+// Mutation types as a list: from the config, or from the command line (e.g. --mutation_types SBS,DBS)
+def mutation_types_list() {
+    return params.mutation_types instanceof String ? params.mutation_types.tokenize(',')*.trim() : params.mutation_types
 }
 
-// Validate parameters when using specific file inputs
-if (params.input_mutation_table || params.signatures_file) {
+def is_positive_integer(value) {
+    return value.toString().isInteger() && value.toString().toInteger() > 0
+}
+
+// Boolean params are read as params.<name>.toBoolean() throughout, which takes booleans (config,
+// params file, legacy parser) and strings: with Nextflow's strict parser (the default from 26.04),
+// values given on the command line stay strings, and 'false' would be true in Groovy
+def validate_parameters(mutation_types) {
+    ['help', 'COSMIC_signatures', 'cleanup_temp', 'run_only_simulations', 'add_noise', 'run_only_optimisation', 'optimised',
+     'use_GPU', 'no_CI_for_penalties', 'calculate_penalty_on_average', 'plot_optimisation_plots',
+     'plot_bootstrap_attributions', 'plot_metrics', 'plot_signatures', 'plot_input_spectra', 'plot_fitted_spectra',
+     'plot_residuals', 'show_poisson_errors', 'show_strands', 'show_nontranscribed_region'].each { name ->
+        if (!(params[name].toString().trim().toLowerCase() in ['true', 'false'])) {
+            error "ERROR: ${name} must be true or false (got '${params[name]}')"
+        }
+    }
+    // Threshold scan settings
+    if (params.weak_thresholds.toString().trim() == 'auto' && params.optimisation_strategy != 'removal') {
+        error "ERROR: weak_thresholds = 'auto' needs optimisation_strategy = 'removal' (got '${params.optimisation_strategy}'). Give an explicit list, e.g. --weak_thresholds 0,0.0001,0.0002,0.0003"
+    }
+    if (!(params.threshold_scan in ['trajectory', 'separate'])) {
+        error "ERROR: threshold_scan must be 'trajectory' or 'separate' (got '${params.threshold_scan}')"
+    }
+    // The optimisation (unless only simulating) and the final attribution (unless only optimising)
+    // need at least one bootstrap iteration
+    def only_simulations = params.run_only_simulations.toBoolean()
+    def only_optimisation = params.run_only_optimisation.toBoolean()
+    def bootstrap_counts_needed = [number_of_bootstrapped_samples_in_optimisation: !only_simulations,
+                                   number_of_bootstrapped_samples: !only_simulations && !only_optimisation]
+    bootstrap_counts_needed.each { name, needed ->
+        if (needed && !is_positive_integer(params[name])) {
+            error "ERROR: ${name} must be a positive integer (got '${params[name]}')"
+        }
+    }
+    // Specific file inputs
     if (params.input_mutation_table) {
         if (mutation_types.size() != 1) {
             error "ERROR: When using --input_mutation_table, please specify exactly ONE mutation type. Got: ${mutation_types}. Use: --mutation_types SBS (or DBS, ID, etc.)"
         }
         if (mutation_types[0] == 'SBS') {
-            // For SBS, also check that only one context is specified
             log.info "Using specific mutation table for ${mutation_types[0]} with context ${params.SBS_context}"
         } else {
             log.info "Using specific mutation table for ${mutation_types[0]}"
         }
     }
-    
     if (params.signatures_file) {
         if (mutation_types.size() != 1) {
             error "ERROR: When using --signatures_file, please specify exactly ONE mutation type. Got: ${mutation_types}. Use: --mutation_types SBS (or DBS, ID, etc.)"
@@ -113,224 +150,227 @@ if (params.input_mutation_table || params.signatures_file) {
     }
 }
 
-
-// Include modules
-include { stage_default_signatures_workflow } from './modules/stage_default_inputs'
-include { stage_default_inputs_workflow } from './modules/stage_default_inputs'
-include { plot_spectra_workflow } from './modules/plotting'
-include { ALL_FINAL_PLOTS_workflow } from './modules/plotting'
-include { convert_data_workflow } from './modules/data_conversion'
-include { NNLS_unoptimized_workflow as UnoptimizedNNLS } from './modules/nnls'
-include { NNLS_optimized_workflow as OptimizedNNLS } from './modules/nnls'
-include { NNLS_bootstrap_workflow as OptimizedNNLSforBootstrap } from './modules/nnls'
-include { FINAL_NNLS_workflow } from './modules/nnls'
-include { FINAL_NNLS_BOOTSTRAP_workflow } from './modules/nnls'
-include { simulate_data_workflow } from './modules/simulations'
-include { BOOTSTRAP_TABLES_workflow } from './modules/bootstrap_tables'
-include { FINAL_BOOTSTRAP_TABLES_workflow } from './modules/bootstrap_tables'
-include { OPTIMAL_PENALTIES_workflow } from './modules/optimal_penalties'
-include { OPTIMISATION_PLOTS_workflow } from './modules/optimisation_plots'
-include { cleanup_workflow } from './modules/cleanup'
-
-// Main workflow
-workflow {
-    // Set up input channels based on parameters
-    // Priority: specific files > SigProfiler outputs > default directories
-    
-    // Handle specific file inputs (highest priority)
-    if (params.signatures_file) {
-        // Convert specific signature file
-        convert_data_workflow(params.dataset, file(params.signatures_file).toAbsolutePath(), 'specific_signature_files', mutation_types)
-        signature_files_channel = convert_data_workflow.out.signature_files.collect()
-        
-        if (params.plot_signatures) {
-            for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, "${params.output_path}/temp/signature_tables", 'signatures', signature_files_channel)
-            }
-        }
-    } else if (params.SP_extractor_output_path) {
-        // Convert SigProfiler extractor output to temp location
-        convert_data_workflow(params.dataset, params.SP_extractor_output_path, 'signature_tables', mutation_types)
-        signature_files_channel = convert_data_workflow.out.signature_files.collect()
-        
-        if (params.plot_signatures) {
-            for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, "${params.output_path}/temp/signature_tables", 'signatures', signature_files_channel)
-                }
+// Which backend runs the NNLS, and how many bootstrap iterations each task runs. Without
+// use_GPU, the NNLS jobs of a GPU config still go to its GPU queue but run on the CPU.
+def log_nnls_backend() {
+    def use_gpu = params.use_GPU.toBoolean()
+    def chunk_size = (params.bootstrap_chunk_size ?: 0) as int
+    def per_task = chunk_size > 0 ? "up to ${chunk_size} bootstrap iterations per task"
+        : (use_gpu ? 'all bootstrap iterations of an attribution in one task' : 'one bootstrap iteration per task')
+    if (use_gpu) {
+        log.info "NNLS backend: GPU (cuML, ${params.gpu_precision} precision), ${per_task}, env: ${params.gpu_conda_env ?: 'the default one'}"
+        if (!params.gpu_conda_env && workflow.profile.tokenize(',').contains('conda')) {
+            log.warn "use_GPU = true without gpu_conda_env: the GPU NNLS processes run in the default conda env, which has no cuML. Set gpu_conda_env to the full path of the env built by setup_gpu_env.sh"
         }
     } else {
-        // Use default signature tables
-        stage_default_signatures_workflow()
-        signature_files_channel = stage_default_signatures_workflow.out.staged_signature_tables.collect()
-        
-        if (params.plot_signatures) {
-            for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, params.signature_tables, 'signatures', signature_files_channel)
-            }
-        }
-    }
-    
-    // Handle specific mutation table input (highest priority)
-    if (params.input_mutation_table) {
-        // Convert specific mutation table file
-        convert_data_workflow(params.dataset, file(params.input_mutation_table).toAbsolutePath(), 'specific_mutation_files', mutation_types)
-        input_files_channel = convert_data_workflow.out.input_files.collect()
-        
-        if (params.plot_input_spectra) {
-            for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, "${params.output_path}/temp/input_tables", 'mutation_spectra', input_files_channel)
-            }
-        }
-    } else if (params.SP_extractor_output_path && !params.SP_matrix_generator_output_path) {
-        // Convert extractor matrices to temp location
-        convert_data_workflow(params.dataset, params.SP_extractor_output_path, 'extractor_matrices', mutation_types)
-        input_files_channel = convert_data_workflow.out.input_files.collect()
-        
-        if (params.plot_input_spectra) {
-            for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, "${params.output_path}/temp/input_tables", 'mutation_spectra', input_files_channel)
-            }
-        }
-    } else if (params.SP_matrix_generator_output_path) {
-        // Convert matrix generator output to temp location
-        convert_data_workflow(params.dataset, params.SP_matrix_generator_output_path, 'matrix_generator_matrices', mutation_types)
-        input_files_channel = convert_data_workflow.out.input_files.collect()
-        
-        if (params.plot_input_spectra) {
-            for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, "${params.output_path}/temp/input_tables", 'mutation_spectra', input_files_channel)
-            }
-        }
-    } else {
-        // Use default input tables - collect them into a channel
-        stage_default_inputs_workflow(params.dataset)
-        input_files_channel = stage_default_inputs_workflow.out.staged_input_tables.collect()
-        
-        if (params.plot_input_spectra) {
-            for (mutation_type in mutation_types) {
-                plot_spectra_workflow(params.dataset, mutation_type, params.input_tables, 'mutation_spectra', input_files_channel)
-            }
-        }
-    }
-    def all_plot_outputs = []
-
-    // Process each mutation type sequentially to avoid channel conflicts
-    for (mutation_type in mutation_types) {
-        // Run unoptimized NNLS
-        UnoptimizedNNLS(
-            params.dataset,
-            mutation_type,
-            input_files_channel,
-            signature_files_channel
-        )
-
-        // Run simulation workflow
-        simulate_data_workflow(
-            UnoptimizedNNLS.out.dataset_mutation_pairs,
-            UnoptimizedNNLS.out.mutations_table
-        )
-        
-        def optimized_outputs = []
-        def bootstrap_outputs = []
-        // Run optimized NNLS for each threshold combination
-        for (weak_threshold in params.weak_thresholds) {
-            for (strong_threshold in params.strong_thresholds) {
-                // Standard optimized NNLS
-                OptimizedNNLS(
-                    params.dataset,
-                    mutation_type,
-                    simulate_data_workflow.out.all_simulation_outputs,
-                    signature_files_channel,
-                    weak_threshold,
-                    strong_threshold
-                )
-                optimized_outputs.add(OptimizedNNLS.out.dataset_mutation_pairs)
-                
-                // Optimized NNLS with bootstrap
-                OptimizedNNLSforBootstrap(
-                    params.dataset,
-                    mutation_type,
-                    simulate_data_workflow.out.all_simulation_outputs,
-                    signature_files_channel,
-                    weak_threshold,
-                    strong_threshold,
-                    params.number_of_bootstrapped_samples_in_optimisation
-                )
-                bootstrap_outputs.add(OptimizedNNLSforBootstrap.out.bootstrap_done)
-            }
-        }
-
-        // Wait for ALL processes to complete
-        all_optimized = Channel.empty().mix(*optimized_outputs).collect()
-        all_bootstrap = Channel.empty().mix(*bootstrap_outputs).collect()
-        
-        // Generate bootstrap tables after ALL optimized runs complete
-        // Wait for both OptimizedNNLS and OptimizedNNLSforBootstrap to finish
-        BOOTSTRAP_TABLES_workflow(
-            UnoptimizedNNLS.out.dataset_mutation_pairs,
-            all_optimized.mix(all_bootstrap).collect(),
-            params.weak_thresholds,
-            params.strong_thresholds,
-            params.number_of_bootstrapped_samples_in_optimisation
-        )
-        
-        // Calculate optimal penalties
-        OPTIMAL_PENALTIES_workflow(
-            BOOTSTRAP_TABLES_workflow.out.bootstrap_tables,
-            UnoptimizedNNLS.out.dataset_mutation_pairs,
-            params.weak_thresholds,
-            params.strong_thresholds
-        )
-        
-        // Generate optimization plots
-        OPTIMISATION_PLOTS_workflow(
-            OPTIMAL_PENALTIES_workflow.out.penalties_for_optimisation_plotting,
-            params.weak_thresholds,
-            params.strong_thresholds
-        )
-        
-        // Run final NNLS with optimal penalties
-        FINAL_NNLS_workflow(
-            OPTIMAL_PENALTIES_workflow.out.penalties_for_central_NNLS_attribution,
-            OPTIMAL_PENALTIES_workflow.out.optimal_weak_penalty,
-            OPTIMAL_PENALTIES_workflow.out.optimal_strong_penalty,
-            input_files_channel,
-            signature_files_channel
-        )
-        
-        // Run final bootstrap NNLS with optimal penalties
-        FINAL_NNLS_BOOTSTRAP_workflow(
-            OPTIMAL_PENALTIES_workflow.out.penalties_for_bootstrap_NNLS_attribution,
-            OPTIMAL_PENALTIES_workflow.out.optimal_weak_penalty,
-            OPTIMAL_PENALTIES_workflow.out.optimal_strong_penalty,
-            input_files_channel,
-            signature_files_channel,
-            params.number_of_bootstrapped_samples
-        )
-
-        // Generate final bootstrap tables after final bootstrap NNLS completes
-        FINAL_BOOTSTRAP_TABLES_workflow(
-            FINAL_NNLS_workflow.out.dataset_mutation_pairs,
-            FINAL_NNLS_BOOTSTRAP_workflow.out.bootstrap_done,
-            params.number_of_bootstrapped_samples
-        )
-
-        // Generate final plots
-        ALL_FINAL_PLOTS_workflow(
-            FINAL_NNLS_workflow.out.dataset_mutation_pairs,
-            FINAL_BOOTSTRAP_TABLES_workflow.out.attributions_per_sample,
-            FINAL_BOOTSTRAP_TABLES_workflow.out.signature_prevalences
-        )
-        all_plot_outputs.add(ALL_FINAL_PLOTS_workflow.out.bootstrap_plots)
-        all_plot_outputs.add(ALL_FINAL_PLOTS_workflow.out.metrics_plots)
-        all_plot_outputs.add(ALL_FINAL_PLOTS_workflow.out.fitted_plots)
-        all_plot_outputs.add(ALL_FINAL_PLOTS_workflow.out.residuals_plots)
-    }
-    // Cleanup temporary files if specified
-    if (params.cleanup_temp) {
-        // Combine all accumulated channels
-        all_plots_done = Channel.empty().mix(*all_plot_outputs).collect()
-        cleanup_workflow(all_plots_done)
+        log.info "NNLS backend: CPU, ${per_task}"
     }
 }
 
+// Write what is needed to reproduce this run (resolved seed, code revision, versions,
+// profile, all parameters) next to its results, in <output_path>/pipeline_info/.
+def write_run_info(run_seed, seed_source) {
+    def git_commit = 'n/a'
+    try {
+        def proc = ['git', '-C', "${workflow.projectDir}", 'rev-parse', 'HEAD'].execute()
+        proc.waitFor()
+        if (proc.exitValue() == 0) {
+            git_commit = proc.text.trim()
+        }
+    } catch (Exception _ignored) { }
+    def info = [
+        'run name'         : workflow.runName,
+        'session id'       : workflow.sessionId,
+        'start'            : workflow.start,
+        'command line'     : workflow.commandLine,
+        'project dir'      : workflow.projectDir,
+        'revision'         : workflow.revision ?: 'n/a',
+        'commit id'        : workflow.commitId ?: git_commit,
+        'nextflow version' : workflow.nextflow.version,
+        'profile'          : workflow.profile,
+        'container engine' : workflow.containerEngine ?: 'none',
+        'container'        : workflow.container ?: 'none',
+        'rng seed'         : run_seed,
+        'rng seed source'  : seed_source,
+    ]
+    def lines = info.collect { k, v -> "${k.padRight(18)}: ${v}" }
+    lines << '' << 'params:'
+    lines.addAll(params.sort().collect { k, v -> "  ${k.padRight(46)}: ${v}" })
+    def info_dir = file("${params.output_path}/pipeline_info")
+    info_dir.mkdirs()
+    file("${info_dir}/run_info_${workflow.runName}.txt").text = lines.join('\n') + '\n'
+}
+
+// <weak>_<strong> labels of an optimisation output folder SIM_<dataset>_<context>_NNLS_<weak>_<strong>
+def pair_suffix(folder, dataset) {
+    def prefix = "SIM_${dataset}_${params.SBS_context}_NNLS_".toString()
+    if (!folder.startsWith(prefix)) {
+        error "ERROR: unexpected optimisation output folder ${folder} (expected ${prefix}<weak>_<strong>)"
+    }
+    return folder.substring(prefix.length())
+}
+
+// Choice of the penalties on the simulated data: threshold scan, bootstrap of every threshold
+// pair, truth studies and the optimal penalties of each mutation type
+workflow OPTIMISATION {
+    take:
+    simulated           // (dataset, mutation_type, simulated tables and truth)
+    signature_files
+    seed
+
+    main:
+    resolve_thresholds(simulated, signature_files)
+    def scan = simulated.join(resolve_thresholds.out, by: [0, 1], failOnMismatch: true, failOnDuplicate: true)
+    run_optimized_NNLS(scan, signature_files)
+    run_bootstrap_NNLS(scan, signature_files,
+        bootstrap_chunks(params.number_of_bootstrapped_samples_in_optimisation, params.bootstrap_chunk_size), seed)
+
+    // The central attribution and the bootstrap iterations of each threshold pair, identified by
+    // its output folder SIM_<dataset>_<context>_NNLS_<weak>_<strong>
+    def central = run_optimized_NNLS.out.tables
+        .transpose()
+        .map { dataset, mutation_type, f -> tuple(dataset, mutation_type, pair_suffix(f.parent.name, dataset), f) }
+        .groupTuple(by: [0, 1, 2])
+    def bootstrap = run_bootstrap_NNLS.out.tables
+        .transpose()
+        .map { dataset, mutation_type, f -> tuple(dataset, mutation_type, pair_suffix(f.parent.parent.name, dataset), f) }
+        .groupTuple(by: [0, 1, 2])
+    make_optimisation_bootstrap_tables(central.join(bootstrap, by: [0, 1, 2], failOnMismatch: true, failOnDuplicate: true),
+        signature_files, params.number_of_bootstrapped_samples_in_optimisation)
+
+    // Every threshold pair of a mutation type, for the penalty choice and its plots
+    def pairs = make_optimisation_bootstrap_tables.out.bundle.groupTuple(by: [0, 1])
+    calculate_optimal_penalties(scan.join(pairs, by: [0, 1], failOnMismatch: true, failOnDuplicate: true), signature_files)
+
+    if (params.plot_optimisation_plots.toBoolean()) {
+        def plot_inputs = scan
+            .map { dataset, mutation_type, _simulated_tables, weak, strong -> tuple(dataset, mutation_type, weak, strong) }
+            .join(calculate_optimal_penalties.out.analysis, by: [0, 1], failOnMismatch: true, failOnDuplicate: true)
+            .join(pairs, by: [0, 1], failOnMismatch: true, failOnDuplicate: true)
+        plot_optimisation_plots(plot_inputs, signature_files)
+    }
+
+    emit:
+    calculate_optimal_penalties.out.penalties   // (dataset, mutation_type, optimal weak penalty, optimal strong penalty)
+}
+
+// Final attribution of the input data with the optimal penalties: central attribution,
+// bootstrap, summary tables and plots
+workflow FINAL_ATTRIBUTION {
+    take:
+    penalties           // (dataset, mutation_type, optimal weak penalty, optimal strong penalty)
+    input_files
+    signature_files
+    seed
+
+    main:
+    run_final_NNLS(penalties, input_files, signature_files)
+    run_final_bootstrap_NNLS(penalties, input_files, signature_files,
+        bootstrap_chunks(params.number_of_bootstrapped_samples, params.bootstrap_chunk_size), seed)
+    def bootstrap = run_final_bootstrap_NNLS.out.tables.transpose().groupTuple(by: [0, 1])
+    make_bootstrap_tables(run_final_NNLS.out.tables.join(bootstrap, by: [0, 1], failOnMismatch: true, failOnDuplicate: true),
+        input_files, signature_files, params.number_of_bootstrapped_samples)
+
+    // Attribution tables, bootstrap summaries and truth table (simulated data); truth studies
+    def results = run_final_NNLS.out.tables
+        .join(make_bootstrap_tables.out.tables, by: [0, 1], failOnMismatch: true, failOnDuplicate: true)
+        .map { dataset, mutation_type, central, cis, prevalences, per_sample, per_signature, stat_metrics, pruned, truth, truth_studies ->
+            tuple(dataset, mutation_type, [central, cis, prevalences, per_sample, per_signature, stat_metrics, pruned, truth].flatten(),
+                [truth_studies].flatten())
+        }
+
+    if (params.plot_bootstrap_attributions.toBoolean()) {
+        plot_bootstrap_attributions(results.map { dataset, mutation_type, tables, _truth_studies -> tuple(dataset, mutation_type, tables) },
+            input_files, signature_files)
+    }
+    if (params.plot_metrics.toBoolean()) {
+        plot_metrics(results)
+    }
+    if (params.plot_fitted_spectra.toBoolean()) {
+        plot_fitted_spectra(run_final_NNLS.out.tables)
+    }
+    if (params.plot_residuals.toBoolean()) {
+        plot_residuals(run_final_NNLS.out.tables)
+    }
+}
+
+workflow {
+    print_banner()
+    if (params.help.toBoolean()) {
+        print_help()
+        return
+    }
+    log.info "help:                               ${params.help}"
+    // add parameter values to log output (.nextflow.log)
+    log.info params.collect { k, v -> "${k.padRight(34)}: $v" }.join("\n")
+
+    def mutation_types = mutation_types_list()
+    validate_parameters(mutation_types)
+    log_nnls_backend()
+
+    // Resolve the run-wide RNG seed once; it seeds both the simulations and the bootstrap
+    // resampling. Without --seed, a seed is derived from the Nextflow session ID: new for
+    // every fresh run, unchanged on -resume (so cached tasks stay valid), and recorded in
+    // pipeline_info/ so any run can be repeated exactly with --seed <value>.
+    def run_seed = params.seed != null ? (params.seed as long)
+        : ((workflow.sessionId.mostSignificantBits ^ workflow.sessionId.leastSignificantBits) & 0x7fffffffL)
+    def seed_source = params.seed != null ? '--seed' : 'derived from session ID'
+    log.info "RNG seed: ${run_seed} (${seed_source}; rerun with --seed ${run_seed} to reproduce)"
+    write_run_info(run_seed, seed_source)
+
+    def dataset = params.dataset
+
+    // Signature tables. Priority: specific file > SigProfiler extractor output > signature folder
+    def reference_signatures = channel.fromPath("${params.signature_tables}/*.csv", checkIfExists: true).collect()
+    def signature_files
+    if (params.signatures_file) {
+        convert_signatures(dataset, file(params.signatures_file, checkIfExists: true), 'specific_signature_files', mutation_types, reference_signatures)
+        signature_files = convert_signatures.out.signature_files
+            .ifEmpty { error "ERROR: no signature tables converted from ${params.signatures_file}" }.collect()
+    } else if (params.SP_extractor_output_path) {
+        convert_signatures(dataset, file(params.SP_extractor_output_path, checkIfExists: true), 'signature_tables', mutation_types, reference_signatures)
+        signature_files = convert_signatures.out.signature_files
+            .ifEmpty { error "ERROR: no signature tables converted from ${params.SP_extractor_output_path}" }.collect()
+    } else {
+        signature_files = reference_signatures
+    }
+
+    // Input mutation tables. Priority: specific file > SigProfiler outputs > <input_tables>/<dataset>/
+    def input_files
+    if (params.input_mutation_table) {
+        convert_inputs(dataset, file(params.input_mutation_table, checkIfExists: true), 'specific_mutation_files', mutation_types, reference_signatures)
+        input_files = convert_inputs.out.input_files
+            .ifEmpty { error "ERROR: no mutation tables converted from ${params.input_mutation_table}" }.collect()
+    } else if (params.SP_extractor_output_path && !params.SP_matrix_generator_output_path) {
+        convert_inputs(dataset, file(params.SP_extractor_output_path, checkIfExists: true), 'extractor_matrices', mutation_types, reference_signatures)
+        input_files = convert_inputs.out.input_files
+            .ifEmpty { error "ERROR: no mutation tables converted from ${params.SP_extractor_output_path}" }.collect()
+    } else if (params.SP_matrix_generator_output_path) {
+        convert_inputs(dataset, file(params.SP_matrix_generator_output_path, checkIfExists: true), 'matrix_generator_matrices', mutation_types, reference_signatures)
+        input_files = convert_inputs.out.input_files
+            .ifEmpty { error "ERROR: no mutation tables converted from ${params.SP_matrix_generator_output_path}" }.collect()
+    } else {
+        input_files = channel.fromPath("${params.input_tables}/${dataset}/*.csv", checkIfExists: true).collect()
+    }
+
+    // One (dataset, mutation type) key per mutation type: they run in parallel
+    def keys = channel.fromList(mutation_types).map { mutation_type -> tuple(dataset, mutation_type) }
+
+    if (params.plot_signatures.toBoolean()) {
+        plot_signatures(keys, signature_files)
+    }
+    if (params.plot_input_spectra.toBoolean()) {
+        plot_input_spectra(keys, input_files)
+    }
+
+    // Simulated data from the unoptimised attribution of the input data
+    run_unoptimized_NNLS(keys, input_files, signature_files)
+    simulate_data(run_unoptimized_NNLS.out.mutations_table, signature_files, run_seed)
+
+    if (!params.run_only_simulations.toBoolean()) {
+        OPTIMISATION(simulate_data.out.tables, signature_files, run_seed)
+        if (!params.run_only_optimisation.toBoolean()) {
+            FINAL_ATTRIBUTION(OPTIMISATION.out, input_files, signature_files, run_seed)
+        }
+    }
+}

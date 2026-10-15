@@ -1,56 +1,39 @@
 // modules/simulations.nf
 
-// parameters for helper flags
-def noise_flag = params.add_noise ? "-z" : ""
-def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
+include { signature_prefix } from './common'
 
-workflow simulate_data_workflow {
-    take:
-    dataset_mutation_pairs // tuple of (dataset, mutation_type)
-    mutations_table // path to mutations table
-    // signature_files // path to signature files
+// Simulated data (SIM_<dataset>) from the unoptimised signature activities of the input data:
+// mutation tables and their truth (signature weights) table
+process simulate_data {
+    tag "${dataset}_${mutation_type}"
+    // intermediate files, kept in <output_path>/temp with cleanup_temp = false or when only simulating
+    publishDir "${params.output_path}/temp/output_tables", mode: 'copy', overwrite: true,
+        enabled: !params.cleanup_temp.toBoolean() || params.run_only_simulations.toBoolean()
 
-    main:
-    process simulate_data {
-        tag "${dataset}_${mutation_type}"
-        publishDir "${params.output_path}/temp/output_tables", mode: 'copy', overwrite: true
+    input:
+    tuple val(dataset), val(mutation_type), path(mutations_table)
+    path signature_files, stageAs: 'signature_tables/*'
+    val seed
 
-        input:
-        tuple val(dataset), val(mutation_type)
-        path mutations_table
-        // path signature_files
+    output:
+    tuple val(dataset), val(mutation_type), path("SIM_${dataset}/WGS_SIM_${dataset}.*.csv"), emit: tables
 
-        output:
-        path "SIM_${dataset}/WGS_SIM_${dataset}.*.csv", optional: true
-        tuple val(dataset), val(mutation_type), emit: simulation_outputs
-        tuple val(dataset), val(mutation_type), emit: simulation_outputs_for_bootstrap
-
-        script:
-        """
-        python ${workflow.projectDir}/bin/simulate_data.py \
-            -d SIM_${dataset} \
-            -t ${mutation_type} \
-            -c ${params.SBS_context} \
-            -n ${params.number_of_simulated_samples} \
-            -p ${signature_prefix} \
-            -B ${noise_flag} \
-            --noise_type ${params.noise_type} \
-            -Z ${params.noise_stdev} \
-            --zero_inflation_threshold ${params.zero_inflation_threshold} \
-            -i ${mutations_table} \
-            -s ${params.output_path}/temp/signature_tables \
-            -o "./"
-        """
-    }
-
-    // Execute simulation for each dataset/mutation_type pair
-    simulate_data(
-        dataset_mutation_pairs,
-        mutations_table
-    )
-
-    emit:
-    simulation_outputs = simulate_data.out.simulation_outputs  // (dataset, mutation_type) channel
-    simulation_outputs_for_bootstrap = simulate_data.out.simulation_outputs_for_bootstrap  // (dataset, mutation_type) channel
-    all_simulation_outputs = simulate_data.out[0]  // All output files
+    script:
+    def noise_flag = params.add_noise.toBoolean() ? "-z" : ""
+    """
+    simulate_data.py \\
+        -d SIM_${dataset} \\
+        -t ${mutation_type} \\
+        -c ${params.SBS_context} \\
+        -n ${params.number_of_simulated_samples} \\
+        -p ${signature_prefix()} \\
+        -B ${noise_flag} \\
+        --noise_type ${params.noise_type} \\
+        -Z ${params.noise_stdev} \\
+        --zero_inflation_threshold ${params.zero_inflation_threshold} \\
+        -i ${mutations_table} \\
+        -s signature_tables \\
+        -o "./" \\
+        --seed ${seed}
+    """
 }

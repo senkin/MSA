@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import argparse
 import warnings
 import pandas as pd
@@ -129,6 +130,30 @@ def calculate_optimal_penalty(sensitivity_table, specificity_table, label='', me
     
     print('Optimal penalties returned:', optimal_penalties)
     return optimal_penalties
+
+def select_penalties(optimal_penalties, average_penalties, weak_thresholds, strong_thresholds,
+                     signatures_to_prioritise=(), use_average=False):
+    """(weak, strong) penalties for the final attribution.
+
+    The largest per-signature optimal penalties (of the prioritised signatures, if any), or the
+    'average' optimum with use_average. When none is defined (e.g. every signature
+    deprioritised, or no signature present in the simulated truth), warn and use the smallest
+    scanned penalties rather than passing NaN on, which would silently skip the optimisation.
+    """
+    if signatures_to_prioritise:
+        # use with care for multiple signatures; average over prioritised signatures not implemented
+        selected = optimal_penalties.loc[signatures_to_prioritise, :]
+    else:
+        selected = optimal_penalties
+    weak = selected['optimal_weak_penalty'].dropna().max()
+    strong = selected['optimal_strong_penalty'].dropna().max()
+    if use_average and not signatures_to_prioritise:
+        weak, strong = average_penalties
+    if np.isnan(weak) or np.isnan(strong):
+        weak, strong = min(weak_thresholds), min(strong_thresholds)
+        warnings.warn('No optimal penalty could be determined (all undefined): using the smallest scanned '
+                      'penalties, weak %s and strong %s' % (weak, strong))
+    return weak, strong
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -368,21 +393,17 @@ if __name__ == '__main__':
         optimal_penalties.at[signature, 'optimal_weak_penalty'] = optimal_weak_penalty
         optimal_penalties.at[signature, 'optimal_strong_penalty'] = optimal_strong_penalty
     average_optimal_weak_penalty, average_optimal_strong_penalty = calculate_optimal_penalty(sensitivity_table_to_use, specificity_table_to_use, label = 'average', metric_to_prioritise=metric_to_prioritise, threshold=metric_threshold)
-    if signatures_to_prioritise:
-        # use with care for multiple signatures
-        optimal_weak_penalty = optimal_penalties.loc[signatures_to_prioritise,:]['optimal_weak_penalty'].dropna().max()
-        optimal_strong_penalty = optimal_penalties.loc[signatures_to_prioritise,:]['optimal_strong_penalty'].dropna().max()
-        # on average calculation for prioritised signatures: not implemented
-    else:
-        optimal_weak_penalty = optimal_penalties['optimal_weak_penalty'].dropna().max()
-        optimal_strong_penalty = optimal_penalties['optimal_strong_penalty'].dropna().max()
-        if average:
-            optimal_weak_penalty = average_optimal_weak_penalty
-            optimal_strong_penalty = average_optimal_strong_penalty
+    optimal_weak_penalty, optimal_strong_penalty = select_penalties(
+        optimal_penalties, (average_optimal_weak_penalty, average_optimal_strong_penalty),
+        weak_thresholds, strong_thresholds, signatures_to_prioritise, use_average=average)
     optimal_penalties.at['average', 'optimal_weak_penalty'] = average_optimal_weak_penalty
     optimal_penalties.at['average', 'optimal_strong_penalty'] = average_optimal_strong_penalty
     optimal_penalties.at['selected', 'optimal_weak_penalty'] = optimal_weak_penalty
     optimal_penalties.at['selected', 'optimal_strong_penalty'] = optimal_strong_penalty
+    if len(weak_thresholds) > 1 and optimal_weak_penalty == max(weak_thresholds):
+        warnings.warn('Selected weak penalty %s is the largest threshold scanned: the optimum may lie above '
+                      'the scanned range. Consider extending weak_thresholds (or weak_thresholds = \'auto\').'
+                      % optimal_weak_penalty)
     weak_penalty_file.write("%s\n" % optimal_weak_penalty)
     strong_penalty_file.write("%s\n" % optimal_strong_penalty)
 

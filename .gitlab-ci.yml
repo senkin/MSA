@@ -1,9 +1,28 @@
-
 stages:
   - test
 
+variables:
+  NXF_VER: "26.04.6"
+
+# pinned by digest: the same image index as params.container_image in nextflow.config
+.msa_image: &msa_image
+  image: ssenkin/msa@sha256:0647240af3ecacf6356502d91f676403941700694ecd8c7c03c843d9a3e4f471
+
+unit_tests:
+  <<: *msa_image
+  stage: test
+  script:
+    - mamba run -n MSA python -m unittest discover -s tests -v
+
 test_nextflow:
-  image: ssenkin/msa:amd64
+  <<: *msa_image
   stage: test
   script:
     - mamba run -n MSA nextflow run run_auto_optimised_analysis.nf -profile test
+
+# strict syntax, the default parser from Nextflow 26.04: lint fails on any error
+lint_nextflow:
+  <<: *msa_image
+  stage: test
+  script:
+    - mamba run -n MSA nextflow lint run_auto_optimised_analysis.nf modules nextflow.config
