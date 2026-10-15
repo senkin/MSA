@@ -3,6 +3,8 @@ import os, copy
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'bin'))
 from common_methods import make_folder_if_not_exists, calculate_similarity, calculate_stat_scores
 
 def get_comma_separated_args(option, opt, value, parser):

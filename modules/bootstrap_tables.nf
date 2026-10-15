@@ -1,136 +1,92 @@
 // modules/bootstrap_tables.nf
 
-workflow BOOTSTRAP_TABLES_workflow {
-    take:
-    dataset_mutation_pairs  // tuple of (dataset, mutation_type)
-    bootstrap_outputs       // all bootstrap outputs from previous step
-    weak_thresholds         // list of weak thresholds
-    strong_thresholds       // list of strong thresholds
-    num_bootstrap_samples   // number of bootstrap samples
-    
-    main:
-    // Process to make bootstrap tables for each threshold combination
-    process make_optimisation_bootstrap_tables {
-        tag "${mutation_type}/${dataset}/${weak_threshold}/${strong_threshold}"
-        publishDir "${params.output_path}/outputs_optimisation"
-        
-        input:
-        tuple val(dataset), val(mutation_type)
-        val bootstrap_outputs_ready  // signal that all bootstrap outputs are complete
-        each weak_threshold
-        each strong_threshold
-        val num_bootstrap_samples
-        
-        output:
-        path "*/*.csv", emit: bootstrap_tables
-        path "*/truth_studies/*.csv", optional: true, emit: truth_studies_csv
-        path "*/truth_studies/*.json", optional: true, emit: truth_studies_json
-        
-        script:
-        def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
-        """
-        python ${workflow.projectDir}/bin/make_bootstrap_tables.py -d SIM_${dataset} -t ${mutation_type} -p ${signature_prefix} \\
-            --suffix ${weak_threshold}_${strong_threshold} -l ${params.confidence_level} \\
-            -c ${params.SBS_context} -S ${params.output_path}/temp/signature_tables \\
-            -T ${params.signature_attribution_thresholds.join(' ')} \\
-            -i ${params.output_path}/outputs_optimisation -o "./" -n ${num_bootstrap_samples}
-        """
-    }
-    
-    // Wait for all bootstrap outputs to complete
-    bootstrap_outputs
-        .collect()
-        .set { bootstrap_ready_signal }
-    
-    // Run make_optimisation_bootstrap_tables for each combination
-    // The 'each' directive will create all combinations automatically
-    make_optimisation_bootstrap_tables(
-        dataset_mutation_pairs,
-        bootstrap_ready_signal,
-        Channel.from(weak_thresholds),    // each weak_threshold
-        Channel.from(strong_thresholds),   // each strong_threshold
-        num_bootstrap_samples
-    )
-    
-    emit:
-    bootstrap_tables = make_optimisation_bootstrap_tables.out.bootstrap_tables
-    truth_studies_csv = make_optimisation_bootstrap_tables.out.truth_studies_csv
-    truth_studies_json = make_optimisation_bootstrap_tables.out.truth_studies_json
+include { signature_prefix; table_name; list_args } from './common'
+
+// Bootstrap summary tables of one threshold pair of the optimisation (simulated data):
+// confidence intervals, prevalences and the truth studies the penalty choice is based on.
+// Also writes bundle/<pair>: what the penalty choice and its plots read for this pair (truth
+// studies and the central attribution tables), hard-linked where possible, not published.
+process make_optimisation_bootstrap_tables {
+    tag "${mutation_type}/${dataset}/${suffix}"
+    label 'memory_medium'
+    publishDir "${params.output_path}/outputs_optimisation", enabled: !params.cleanup_temp.toBoolean(),
+        saveAs: { f -> f.startsWith('bundle/') ? null : f }
+
+    input:
+    tuple val(dataset), val(mutation_type), val(suffix),
+        path("attributions/SIM_${dataset}_${params.SBS_context}_NNLS_${suffix}/*"),
+        path("attributions/SIM_${dataset}_${params.SBS_context}_NNLS_${suffix}/bootstrap_output/*")
+    path signature_files, stageAs: 'signature_tables/*'
+    val num_bootstrap_samples
+
+    output:
+    path "SIM_${dataset}_${params.SBS_context}_NNLS_${suffix}/*.csv", emit: tables
+    path "SIM_${dataset}_${params.SBS_context}_NNLS_${suffix}/truth_studies/*", emit: truth_studies
+    tuple val(dataset), val(mutation_type), path("bundle/SIM_${dataset}_${params.SBS_context}_NNLS_${suffix}", type: 'dir'), emit: bundle
+
+    script:
+    def pair = "SIM_${dataset}_${params.SBS_context}_NNLS_${suffix}"
+    // --no_distributions: the per-sample bootstrap distributions (JSON, ~1 GB each per pair at
+    // default sizes) are only read by the final attribution's plots, never by the optimisation
+    """
+    make_bootstrap_tables.py -d SIM_${dataset} -t ${mutation_type} -p ${signature_prefix()} \\
+        --suffix ${suffix} -l ${params.confidence_level} \\
+        -c ${params.SBS_context} -S signature_tables \\
+        -T ${list_args(params.signature_attribution_thresholds)} \\
+        -i attributions -o "./" -n ${num_bootstrap_samples} --no_distributions
+
+    mkdir -p bundle/${pair}
+    cp -r ${pair}/truth_studies bundle/${pair}/
+    for table in weights_table stat_info; do
+        central=attributions/${pair}/output_SIM_${dataset}_${mutation_type}_\${table}.csv
+        ln -L \$central bundle/${pair}/ 2>/dev/null || cp -L \$central bundle/${pair}/
+    done
+    """
 }
 
+// Bootstrap summary tables of the final attribution: confidence intervals, prevalences,
+// pruned attribution and, for simulated data, the truth studies
+process make_bootstrap_tables {
+    tag "${mutation_type}/${dataset}"
+    label 'memory_high'
+    // the bootstrap distributions per sample/signature (JSON) are intermediate files
+    publishDir "${params.output_path}/output_tables", mode: 'copy', overwrite: true,
+        saveAs: { f -> (params.cleanup_temp.toBoolean() && f ==~ /[^\/]+\/[^\/]+\.json/) ? null : f }
 
-// Final bootstrap tables workflow (no penalties needed)
-workflow FINAL_BOOTSTRAP_TABLES_workflow {
-    take:
-    attribution_for_tables  // tuple of (dataset, mutation_type) from final NNLS
-    bootstrap_outputs       // bootstrap outputs from final bootstrap NNLS
-    num_bootstrap_samples   // number of bootstrap samples
-    
-    main:
-    // Process to make final bootstrap tables
-    process make_bootstrap_tables {
-        tag "${mutation_type}/${dataset}"
-        publishDir "${params.output_path}/output_tables", mode: 'copy', overwrite: true
-        
-        input:
-        tuple val(dataset), val(mutation_type)
-        val bootstrap_outputs_ready
-        val num_bootstrap_samples
-        
-        output:
-        path "${dataset}/CIs_${dataset}_${mutation_type}_bootstrap_output_*.csv", emit: confidence_intervals
-        path "${dataset}/signatures_prevalences_${dataset}_${mutation_type}.csv", emit: signature_prevalences
-        path "${dataset}/attributions_per_sample_${dataset}_${mutation_type}_bootstrap_output_*.json", emit: attributions_per_sample
-        path "${dataset}/attributions_per_signature_${dataset}_${mutation_type}_bootstrap_output_*.json", emit: attributions_per_signature
-        path "${dataset}/stat_metrics_${dataset}_${mutation_type}_bootstrap_output_*.json", emit: stat_metrics
-        path "${dataset}/pruned_attribution_${dataset}_${mutation_type}_abs_mutations.csv", emit: pruned_attribution
-        path "*/truth_studies/*.csv", optional: true, emit: truth_studies_csv
-        path "*/truth_studies/*.json", optional: true, emit: truth_studies_json
-        
-        script:
-        def signature_prefix = (params.SP_extractor_output_path || params.signatures_file) ? params.signature_prefix + "_conv" : params.signature_prefix
-        """
-        mkdir -p ${params.output_path}/output_tables/${dataset}
-        
-        # Copy simulation files if this is a simulated dataset
-        if [[ ${dataset} == *"SIM"* ]]; then
-            if [[ ${mutation_type} == "SBS" ]]; then
-                cp ${workflow.projectDir}/input_mutation_tables/${dataset}/WGS_${dataset}.${params.SBS_context}.weights.csv ${params.output_path}/output_tables/${dataset}/
-            elif [[ ${mutation_type} == "DBS" ]]; then
-                cp ${workflow.projectDir}/input_mutation_tables/${dataset}/WGS_${dataset}.dinucs.weights.csv ${params.output_path}/output_tables/${dataset}/
-            elif [[ ${mutation_type} == "ID" ]]; then
-                cp ${workflow.projectDir}/input_mutation_tables/${dataset}/WGS_${dataset}.indels.weights.csv ${params.output_path}/output_tables/${dataset}/
-            elif [[ ${mutation_type} == "SV" || ${mutation_type} == "CNV" ]]; then
-                cp ${workflow.projectDir}/input_mutation_tables/${dataset}/WGS_${dataset}.${mutation_type}.weights.csv ${params.output_path}/output_tables/${dataset}/
-            fi
-        fi
-        
-        python ${workflow.projectDir}/bin/make_bootstrap_tables.py -d ${dataset} -t ${mutation_type} -p ${signature_prefix} \\
-            -c ${params.SBS_context} -S ${params.output_path}/temp/signature_tables -l ${params.confidence_level} \\
-            -T ${params.signature_attribution_thresholds.join(' ')} \\
-            -i ${params.output_path}/output_tables -o "./" -n ${num_bootstrap_samples}
-        """
-    }
-    
-    // Wait for all bootstrap outputs to complete
-    bootstrap_outputs
-        .collect()
-        .set { bootstrap_ready_signal }
-    
-    // Run final bootstrap tables generation
-    make_bootstrap_tables(
-        attribution_for_tables,
-        bootstrap_ready_signal,
-        num_bootstrap_samples,
-    )
-    
-    emit:
-    confidence_intervals = make_bootstrap_tables.out.confidence_intervals
-    signature_prevalences = make_bootstrap_tables.out.signature_prevalences
-    attributions_per_sample = make_bootstrap_tables.out.attributions_per_sample
-    attributions_per_signature = make_bootstrap_tables.out.attributions_per_signature
-    stat_metrics = make_bootstrap_tables.out.stat_metrics
-    pruned_attribution = make_bootstrap_tables.out.pruned_attribution
-    truth_studies_csv = make_bootstrap_tables.out.truth_studies_csv
-    truth_studies_json = make_bootstrap_tables.out.truth_studies_json
+    input:
+    tuple val(dataset), val(mutation_type), path("attributions/${dataset}/*"), path("attributions/${dataset}/bootstrap_output/*")
+    path "input_tables/${dataset}/*"
+    path signature_files, stageAs: 'signature_tables/*'
+    val num_bootstrap_samples
+
+    output:
+    tuple val(dataset), val(mutation_type),
+        path("${dataset}/CIs_${dataset}_${mutation_type}_bootstrap_output_*.csv"),
+        path("${dataset}/signatures_prevalences_${dataset}_${mutation_type}.csv"),
+        path("${dataset}/attributions_per_sample_${dataset}_${mutation_type}_bootstrap_output_*.json"),
+        path("${dataset}/attributions_per_signature_${dataset}_${mutation_type}_bootstrap_output_*.json"),
+        path("${dataset}/stat_metrics_${dataset}_${mutation_type}_bootstrap_output_*.json"),
+        path("${dataset}/pruned_attribution_${dataset}_${mutation_type}_abs_mutations.csv"),
+        path("${dataset}/WGS_${dataset}.*.weights.csv", arity: '0..*'),
+        path("${dataset}/truth_studies/*", arity: '0..*'), emit: tables
+
+    script:
+    def truth = "WGS_${dataset}.${table_name(mutation_type)}.weights.csv"
+    """
+    # Simulated datasets come with their truth table (signature weights) among the inputs:
+    # make_bootstrap_tables.py then scores the attribution against it
+    if [[ -f input_tables/${dataset}/${truth} ]]; then
+        ln -s ../../input_tables/${dataset}/${truth} attributions/${dataset}/
+    fi
+
+    make_bootstrap_tables.py -d ${dataset} -t ${mutation_type} -p ${signature_prefix()} \\
+        -c ${params.SBS_context} -S signature_tables -l ${params.confidence_level} \\
+        -T ${list_args(params.signature_attribution_thresholds)} \\
+        -i attributions -o "./" -n ${num_bootstrap_samples}
+
+    # the truth table is kept with the results (and the plots read it from there)
+    if [[ -f input_tables/${dataset}/${truth} ]]; then
+        cp -L input_tables/${dataset}/${truth} ${dataset}/
+    fi
+    """
 }

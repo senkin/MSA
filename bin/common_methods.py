@@ -2,6 +2,8 @@
 Common methods module used across different scripts
 """
 import os
+import re
+import glob
 import math
 import json
 import copy
@@ -12,15 +14,6 @@ from io import StringIO
 from scipy import stats
 from scipy.spatial import distance
 from statsmodels.stats.proportion import proportion_confint
-import matplotlib.pyplot as plt
-
-def is_tool(name):
-    """Check whether `name` is on PATH and marked as executable."""
-
-    # from whichcraft import which # python 2 option
-    from shutil import which
-
-    return which(name) is not None
 
 def make_folder_if_not_exists(folder):
     """Create a folder if it does not exist"""
@@ -31,34 +24,48 @@ def make_folder_if_not_exists(folder):
             warnings.warn("Could not create a folder %s" % folder)
 
 def format_threshold(threshold):
-    """Convert float threshold to clean string for filenames"""
+    """Convert float threshold to clean string for filenames.
+
+    Values with at most 6 decimals keep their plain form (0.0001 -> '0.0001'); anything
+    else uses the shortest exact form (1.2e-07 -> '1.2e-07'), so distinct thresholds
+    never share a label and float(label) == threshold.
+    """
     if threshold == 0.0:
         return "0"
     elif threshold == int(threshold):
         return str(int(threshold))
     else:
         # Remove trailing zeros and decimal point if not needed
-        return f"{threshold:.6f}".rstrip('0').rstrip('.')
+        label = f"{threshold:.6f}".rstrip('0').rstrip('.')
+        return label if float(label) == threshold else repr(float(threshold))
 
-def merge_plots(input_plots_filenames, merged_plot_filename, merge_tool = 'pdfunite'):
-    if is_tool(merge_tool):
-        if merge_tool=='pdfunite':
-            merge_command = merge_tool + ' $(ls -v ' + input_plots_filenames + ') ' + merged_plot_filename
-        elif merge_tool=='pdftk':
-            merge_command = merge_tool + ' $(ls -v ' + input_plots_filenames + ') output ' + merged_plot_filename
-        else:
-            raise ValueError('Output plots merge failed: %s tool unknown (please use pdftk or pdfunite)' % merge_tool)
-    else:
-        warnings.warn('Output plots merge failed: %s tool not available' % merge_tool)
-        return
+def truth_table_path(folder, dataset_name, mutation_type, context=96):
+    """Path of a dataset's truth table (simulated signature weights) in folder.
 
-    print('Merging output plots with command:', merge_command)
+    A dataset counts as simulated when this file exists, whatever its name.
+    """
+    table = {'SBS': str(context), 'DBS': 'dinucs', 'ID': 'indels'}.get(mutation_type, mutation_type)
+    return f'{folder}/WGS_{dataset_name}.{table}.weights.csv'
+
+def merge_plots(input_plots_filenames, merged_plot_filename):
+    """Merge the PDFs matching a glob pattern into one file, in natural order (2 before 10)."""
     try:
-        os.system(merge_command)
-    except:
-        warnings.warn("Could not create a merged file %s. Please check if input files/folders exist." % merged_plot_filename)
-    else:
-        print("Resulting merged pdf: %s" % merged_plot_filename)
+        from pypdf import PdfWriter
+    except ImportError:
+        warnings.warn('Output plots merge skipped: pypdf is not installed')
+        return
+    def natural_key(path):
+        return [int(part) if part.isdigit() else part for part in re.split(r'(\d+)', path)]
+    input_files = sorted(glob.glob(input_plots_filenames), key=natural_key)
+    if not input_files:
+        warnings.warn('Output plots merge skipped: no files match %s' % input_plots_filenames)
+        return
+    writer = PdfWriter()
+    for input_file in input_files:
+        writer.append(input_file)
+    with open(merged_plot_filename, 'wb') as merged_file:
+        writer.write(merged_file)
+    print("Resulting merged pdf: %s" % merged_plot_filename)
 
 def write_data_to_JSON(data, JSON_output_file, json_orient = 'columns', indent = True):
     output_folder = JSON_output_file.rsplit('/',1)[0]
@@ -105,6 +112,8 @@ def read_data_from_JSON(JSON_input_file, pandas=True, json_orient='columns'):
     return data
 
 def plot_array_as_histogram(arrays, labels, title, bins=[0.01*k for k in range(101)], savepath='./hist.pdf'):
+    # imported here: the attribution scripts import this module without plotting
+    import matplotlib.pyplot as plt
     fig = plt.figure()
     ax = fig.add_subplot(111)
     # bins = [0.025*k for k in range(42)]
@@ -123,9 +132,9 @@ def plot_array_as_histogram(arrays, labels, title, bins=[0.01*k for k in range(1
     plt.savefig(savepath, transparent=True)
     plt.close()
 
-def calculate_confidence_interval(array, confidence=95):
-    # return np.percentile(array, [(100-confidence)/2, (100+confidence)/2])
-    return [np.percentile(array, (100-confidence)/2), np.percentile(array, (100+confidence)/2)]
+def calculate_confidence_interval(array, confidence=95, axis=None):
+    # lower and upper bounds, along an axis of a multidimensional array if given
+    return [np.percentile(array, (100-confidence)/2, axis=axis), np.percentile(array, (100+confidence)/2, axis=axis)]
 
 def calculate_similarity(first_sample, second_sample, metric='Cosine', normalise=False):
     """
@@ -226,35 +235,27 @@ def calculate_confusion_matrix(signatures, reco_table, truth_table, number_of_sa
     true_positives, true_negatives, false_positives, false_negatives: list of doubles
     -------
     """
-    true_positives = true_negatives = false_positives = false_negatives = 0
     assert len(reco_table) == len(truth_table)
-
-    true_positives_signatures = []
-    false_negatives_signatures = []
-    false_positives_signatures = []
 
     if not number_of_samples:
         number_of_samples = len(reco_table)
+    if number_of_samples > len(reco_table):
+        raise IndexError(f"{number_of_samples} samples requested, the tables have {len(reco_table)}")
 
-    for i in range(number_of_samples):
-        reco_sample = reco_table.iloc[i]
-        truth_sample = truth_table.iloc[i]
-        for sig in signatures:
-            if truth_sample[sig] > 0 and reco_sample[sig] > 0:
-                true_positives += 1
-                true_positives_signatures.append(truth_sample[sig])
-            elif truth_sample[sig] == 0 and reco_sample[sig] == 0:
-                true_negatives += 1
-            elif truth_sample[sig] > 0 and reco_sample[sig] == 0:
-                false_negatives += 1
-                false_negatives_signatures.append(truth_sample[sig])
-            elif truth_sample[sig] == 0 and reco_sample[sig] > 0:
-                false_positives += 1
-                false_positives_signatures.append(reco_sample[sig])
-            else:
-                raise ValueError(
-                    "Invalid signature attribution values -- please check the tables")
-    
+    # samples by position, signatures by name
+    signatures = list(signatures)
+    reco = reco_table[signatures].to_numpy(dtype=float)[:number_of_samples]
+    truth = truth_table[signatures].to_numpy(dtype=float)[:number_of_samples]
+
+    true_positives = int(np.sum((truth > 0) & (reco > 0)))
+    true_negatives = int(np.sum((truth == 0) & (reco == 0)))
+    false_negatives = int(np.sum((truth > 0) & (reco == 0)))
+    false_positives = int(np.sum((truth == 0) & (reco > 0)))
+    # negative or missing (NaN) values fall in none of the four
+    if true_positives + true_negatives + false_negatives + false_positives != truth.size:
+        raise ValueError(
+            "Invalid signature attribution values -- please check the tables")
+
     return true_positives, true_negatives, false_positives, false_negatives
 
 def calculate_stat_scores(signatures, reco_table, truth_table, number_of_samples = None):

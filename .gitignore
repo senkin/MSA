@@ -6,10 +6,16 @@ input_mutation_tables/*/*_fitted_values.csv
 input_mutation_tables/*/*_residuals.csv
 plots*
 test*
+# ...but not the unit tests (test* is meant for outputs such as --output_path test)
+!/tests/
+!/tests/**
 work
 *.pyc
 logs*
 trace.txt*
 report.html*
 timeline.html*
+pipeline_info/
+nf-pipeline_info/
 .nextflow*
+__pycache__/
