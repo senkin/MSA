@@ -15,5 +15,7 @@ logs*
 trace.txt*
 report.html*
 timeline.html*
+pipeline_info/
+nf-pipeline_info/
 .nextflow*
 __pycache__/

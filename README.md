@@ -128,7 +128,8 @@ output_path/
 │   └── SIM_{dataset}_{context}_NNLS_{weak}_{strong}/  # per-penalty attributions and bootstrap (*)
 ├── optimisation_plots/
 ├── plots/                      # All generated plots
-├── pipeline_info/              # run_info_<run name>.txt: seed, code revision, versions, parameters
+├── pipeline_info/              # run_info_<run name>.txt: seed, code revision, versions, parameters;
+│                               # Nextflow's MSA-nf_report.html, _timeline.html, _dag.html, _trace.txt
 └── temp/                       # (*) converted inputs, unoptimised attributions, simulated data
     ├── input_tables/
     ├── signature_tables/
@@ -196,6 +197,11 @@ optimisation and 1000 in the final attribution).
   accordingly, e.g. `process { withName: 'run_optimized_NNLS|run_bootstrap_NNLS' { time = 8.h } }`.
 * **Retries.** When a retried task then succeeds, Nextflow's summary line still counts the failed
   attempt (`[FAILED] completed=... failed=1`), but the run's exit status is 0.
+* **Container images and conda envs.** Nextflow stores them in the work directory unless told
+  otherwise, so the first run in a new work directory downloads and converts the container image, or
+  creates the conda env, again; on a cluster this can take 15-20 min before the first task starts.
+  Keep them in a fixed shared folder: `apptainer.cacheDir` (or `NXF_APPTAINER_CACHEDIR`) and
+  `conda.cacheDir` in your cluster config.
 * **On one machine.** The local executor refuses a task that requests more memory than is free
   ("Process requirement exceeds available memory"). Cap the requests with e.g.
   `-c local.config` holding `process.resourceLimits = [memory: 8.GB]`; the `test` profile caps them at 2 GB.
