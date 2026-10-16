@@ -38,7 +38,7 @@ def print_banner() {
     log.info '             | |  | |____) / ____ \\                    '
     log.info '             |_|  |_|_____/_/    \\_\\                  '
     log.info '                                                        '
-    log.info '          MUTATIONAL SIGNATURE ANALYSIS v3.0            '
+    log.info "          MUTATIONAL SIGNATURE ANALYSIS v${workflow.manifest.version}"
     log.info '--------------------------------------------------------'
     log.info 'Copyright (C) Sergey Senkin'
     log.info 'This program comes with ABSOLUTELY NO WARRANTY; for details see LICENSE'
@@ -86,6 +86,8 @@ def print_help() {
     log.info "Note: Specific file inputs override SigProfiler outputs, which override default directories."
     log.info "      Converted inputs are kept in <output_path>/temp with --cleanup_temp false."
     log.info ""
+    log.info "All parameters: https://gitlab.com/s.senkin/MSA/-/wikis/Parameters-description-table"
+    log.info ""
 }
 
 // Mutation types as a list: from the config, or from the command line (e.g. --mutation_types SBS,DBS)
@@ -107,6 +109,30 @@ def validate_parameters(mutation_types) {
      'plot_residuals', 'show_poisson_errors', 'show_strands', 'show_nontranscribed_region'].each { name ->
         if (!(params[name].toString().trim().toLowerCase() in ['true', 'false'])) {
             error "ERROR: ${name} must be true or false (got '${params[name]}')"
+        }
+    }
+    // Options the scripts check only when they run, possibly hours into a run (and noise_type not at
+    // all: any other value silently adds no noise)
+    def choices = [
+        optimisation_strategy: ['removal', 'addition', 'add-remove'],
+        bootstrap_method     : ['binomial', 'multinomial', 'multinomial_weight', 'poisson', 'classic', 'bootstrap_residuals'],
+        metric_to_prioritise : ['specificity', 'sensitivity'],
+        noise_type           : ['gaussian', 'Gaussian', 'normal', 'Normal', 'poisson', 'Poisson', 'negative_binomial', 'Negative_binomial'],
+        gpu_precision        : ['mixed', 'fp32', 'fp64'],
+    ]
+    choices.each { name, allowed ->
+        if (!(params[name].toString() in allowed)) {
+            error "ERROR: ${name} must be one of ${allowed.join(', ')} (got '${params[name]}')"
+        }
+    }
+    // Penalties: numbers ('auto' for the weak ones), from a config list or comma-separated
+    ['weak_thresholds', 'strong_thresholds'].each { name ->
+        def value = params[name]
+        if (!(name == 'weak_thresholds' && value.toString().trim() == 'auto')) {
+            def items = value instanceof Collection ? value : value.toString().tokenize(', ')
+            if (!items || items.any { item -> !item.toString().trim().isNumber() }) {
+                error "ERROR: ${name} must be ${name == 'weak_thresholds' ? "'auto' or " : ''}a list of numbers (got '${value}')"
+            }
         }
     }
     // Threshold scan settings
@@ -186,10 +212,12 @@ def write_run_info(run_seed, seed_source) {
         'project dir'      : workflow.projectDir,
         'revision'         : workflow.revision ?: 'n/a',
         'commit id'        : workflow.commitId ?: git_commit,
+        'MSA version'      : workflow.manifest.version,
         'nextflow version' : workflow.nextflow.version,
         'profile'          : workflow.profile,
         'container engine' : workflow.containerEngine ?: 'none',
-        'container'        : workflow.container ?: 'none',
+        // the container directive is a closure (see nextflow.config), so workflow.container is unset
+        'container'        : workflow.containerEngine ? params.container_image : 'none',
         'rng seed'         : run_seed,
         'rng seed source'  : seed_source,
     ]

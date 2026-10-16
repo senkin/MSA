@@ -15,6 +15,8 @@ Once you have installed Nextflow, run the test job locally or on your favourite 
 nextflow run https://gitlab.com/s.senkin/MSA -profile conda,test
 ```
 
+This runs the latest `master`; add `-r <release>` (e.g. `-r v4.0.1`) to run a given release.
+
 **Important**: The pipeline uses Nextflow DSL2 and is tested with Nextflow 26.04.6 (`nextflowVersion = '>=25.04.0'` in the manifest). Pin the version for reproducible runs:
 
 ```bash
@@ -24,7 +26,7 @@ export NXF_VER=26.04.6
 **Strict syntax**: the pipeline follows Nextflow's strict syntax (`nextflow lint run_auto_optimised_analysis.nf modules nextflow.config` reports no errors), so it runs with the strict parser, the default from Nextflow 26.04, as well as with the legacy one (`NXF_SYNTAX_PARSER=v1`, the default of earlier releases); no parser setting is needed.
 With Nextflow 25.04 or 25.10, keep their default (legacy) parser: their strict parser (`NXF_SYNTAX_PARSER=v2`) rejects `-profile` together with an extra `-c` file, e.g. `-c gpu.config` ("Unknown configuration profile", in any pipeline; fixed in Nextflow 26.04).
 
-It is recommended to use [docker](https://www.docker.com/) or [singularity](https://sylabs.io/singularity/) profiles as these normally provide greater stability and reproducibility than [conda](https://conda.io).
+It is recommended to use the [docker](https://www.docker.com/), [apptainer](https://apptainer.org/) or [singularity](https://sylabs.io/singularity/) profiles as these normally provide greater stability and reproducibility than [conda](https://conda.io).
 
 **On a cluster**, choose your executor and queue in your own config file, and see [Running on a cluster](#running-on-a-cluster) for the resources each task needs.
 
@@ -98,7 +100,7 @@ The pipeline processes inputs in the following priority order:
 | --COSMIC_signatures | false | If true, use COSMIC signatures from SigProfiler output; otherwise use de-novo |
 | --seed | null | RNG seed for the simulations and bootstrap resampling. If unset, a seed is derived from the Nextflow session ID; the seed used is always recorded in `pipeline_info/` (see [Reproducibility](#reproducibility)) |
 | --bootstrap_chunk_size | 0 | Bootstrap iterations per job. 0: one per job on CPU, all in one job on GPU. Results do not depend on it |
-| --bootstrap_method | binomial | Bootstrap resampling: `binomial`, `multinomial`, `multinomial_weight`, `poisson`, `classic` (mutation channels resampled with replacement) or `bootstrap_residuals` (residuals of the central fit resampled across channels and added back to it) |
+| --bootstrap_method | binomial | Bootstrap resampling: `binomial`, `multinomial`, `multinomial_weight`, `poisson`, `classic` (mutation channels resampled with replacement) or `bootstrap_residuals` (residuals of the central fit resampled across channels and added back to it). `classic` and `multinomial_weight` move counts to other channels and `poisson` reweights each channel, which widens the confidence intervals: on the test data, presence called from the intervals had a sensitivity of 0.17-0.65 with them, against 1.0 with `binomial`, `multinomial` and `bootstrap_residuals`. Keep them for comparisons |
 | --optimisation_strategy | removal | `removal`: start from all signatures and remove the weak ones; `addition`: start from SBS1 and SBS5 (those in the signature table, otherwise its first signature) and add the strong ones; `add-remove`: from the same start, alternate addition and removal. See [Penalty scan](#penalty-scan) |
 | --weak_thresholds | auto | Weak penalties scanned in the optimisation: `auto`, or an explicit list (config list, or comma-separated on the command line, e.g. `0,0.0001,0.0002,0.0003`). See [Penalty scan](#penalty-scan) |
 | --strong_thresholds | [0] | Strong penalties scanned (similarity increase needed to add a signature), used by `addition` and `add-remove`; same formats as `--weak_thresholds`, except `auto` |
@@ -180,7 +182,7 @@ optimisation and 1000 in the final attribution).
   | `make_bootstrap_tables` (final attribution) | 8 GB | 3.8 GB | samples × iterations × signatures |
   | `make_optimisation_bootstrap_tables` | 4 GB | 2.2 GB | simulated samples × iterations × signatures |
   | `plot_bootstrap_attributions` | 4 GB | 2.8 GB | samples × iterations × signatures |
-  | GPU jobs (`--use_GPU true`) | 8 GB | (not measured) | |
+  | GPU jobs (`--use_GPU true`) | 8 GB | 2.0 GB (optimisation bootstrap), 1.0 GB others | simulated samples, samples |
   | all other processes | 2 GB | 0.15-0.45 GB | samples |
 
   For a larger cohort, raise the first rows in your config, e.g. for 5000 samples and 1000 final
